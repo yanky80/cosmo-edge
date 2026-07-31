@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 
+#include "media/FrameSurface.h"
 #include "media/IOsdTextRenderer.h"
 #include "mem/DeviceContext.h"
 #include "mem/IDeviceContext.h"
@@ -135,6 +136,26 @@ TEST_CASE("VideoFrameServiceImpl: EnsureHostData with null frame", "[VideoFrameS
     auto& sut = fixture.Service();
     VideoFramePtr nullFrame;
     REQUIRE(sut.EnsureHostData(nullFrame) == false);
+}
+
+TEST_CASE("VideoFrameServiceImpl: EnsureHostData accepts external host surface", "[VideoFrameService][.device]") {
+    VideoFrameServiceFixture fixture;
+    auto& sut = fixture.Service();
+
+    std::vector<uint8_t> storage(24, 0x42);
+    auto surface         = std::make_shared<cosmo::media::FrameSurface>();
+    surface->memory_type = cosmo::media::FrameSurfaceMemoryType::Host;
+    cosmo::media::FramePlane plane;
+    plane.virt_addr = storage.data();
+    plane.pitch     = 4;
+    plane.size      = storage.size();
+    surface->planes.push_back(plane);
+
+    auto frame = std::make_shared<cosmo::media::VideoFrame>(4, 4, cosmo::media::PixelFormat::PIXEL_I420, surface);
+    REQUIRE(frame->Active());
+    REQUIRE(frame->GetHostData() == storage.data());
+    REQUIRE(sut.EnsureHostData(frame));
+    REQUIRE(frame->GetHostData() == storage.data());
 }
 
 TEST_CASE("VideoFrameServiceImpl: Crop with null frame", "[VideoFrameService][.device]") {

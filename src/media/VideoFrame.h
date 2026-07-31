@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 
+#include "media/FrameSurface.h"
 #include "media/PixelFormat.h"
 #include "mem/Block.h"
 #include "mem/FixedBlockPool.h"
@@ -15,6 +16,9 @@ namespace media {
     public:
         VideoFrame(int width, int height, PixelFormat format = PixelFormat::PIXEL_I420,
                    uint64_t frameIndex = 0, int64_t timestamp = 0);
+        VideoFrame(int width, int height, PixelFormat format, FrameSurfacePtr surface, uint64_t frameIndex = 0,
+                   int64_t timestamp = 0);
+        VideoFrame(VideoFrame&& data) noexcept;
 
         VideoFrame& operator=(VideoFrame&& data) noexcept;
 
@@ -55,9 +59,11 @@ namespace media {
 
         uint8_t* GetHostData();
         void SetHostData(uint8_t* data);
+        FrameSurfacePtr GetSurface() const;
 
     private:
         void Clear();
+        void ReleaseOwnedResources();
 
     private:
         bool active_    = false;
@@ -76,6 +82,7 @@ namespace media {
 
         mem::Block* block_        = nullptr;
         uint8_t* host_frame_data_ = nullptr;
+        FrameSurfacePtr surface_;
     };
 
 }  // namespace media
