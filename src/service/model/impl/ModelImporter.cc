@@ -17,6 +17,7 @@
 #include <system_error>
 
 #include "nlohmann/json.hpp"
+#include "service/model/impl/ModelConfigParser.h"
 #include "util/ArchiveListingValidator.h"
 #include "util/ErrorCode.h"
 #include "util/Exception.h"
@@ -160,6 +161,29 @@ namespace {
         return !ec;
     }
 
+    bool ValidateImportedModelPackage(const std::string& model_dir, std::string& alg_code) {
+        const std::string config_path = (std::filesystem::path(model_dir) / "config.json").string();
+        const auto parsed             = detail::ModelConfigParser::Parse(config_path);
+        if (!parsed.valid) {
+            LOG_WARN("[ImportModel] Invalid config.json in {}", model_dir);
+            return false;
+        }
+        if (!cosmo::util::IsSupportedChip(parsed.chip_type)) {
+            LOG_WARN("[ImportModel] Unsupported chip_type {} in {}", parsed.chip_type, model_dir);
+            return false;
+        }
+
+        detail::ResolvedModelArtifacts artifacts;
+        std::string error;
+        if (!detail::ModelConfigParser::ResolveModelArtifacts(config_path, model_dir, artifacts, error)) {
+            LOG_WARN("[ImportModel] Invalid artifact mapping in {}: {}", model_dir, error);
+            return false;
+        }
+
+        alg_code = parsed.algorithm_code;
+        return true;
+    }
+
 }  // namespace
 
 util::ErrorEnum ModelImportExporter::ImportFlatArchive(const std::string& temp_dir,
@@ -281,23 +305,14 @@ util::ErrorEnum ModelImportExporter::ImportDirectoryArchive(const std::string& t
         }
         sub_dir = std::move(resolved_sub_dir);
 
-        // Validate: must have config.json
+        // Validate against the package config and compiled platform profile.
+        std::string sub_alg_code;
         if (!fs::exists(sub_dir + "/config.json")) {
             LOG_WARN("[ImportModel] Skipping directory without config.json: {}", sub_dir_name);
             continue;
         }
-
-        // Must have a model file (extension depends on platform)
-        bool has_model = fs::exists(sub_dir + "/model" + std::string(cosmo::util::kModelFileExt));
-        if (!has_model) {
-            has_model =
-                std::any_of(fs::directory_iterator(sub_dir), fs::directory_iterator(), [](const auto& f) {
-                    return f.path().extension() == cosmo::util::kModelFileExt ||
-                           f.path().extension() == ".bmodel" || f.path().extension() == ".onnx";
-                });
-        }
-        if (!has_model) {
-            LOG_WARN("[ImportModel] Skipping directory without model file: {}", sub_dir_name);
+        if (!ValidateImportedModelPackage(sub_dir, sub_alg_code)) {
+            LOG_WARN("[ImportModel] Skipping invalid model package: {}", sub_dir_name);
             continue;
         }
 
@@ -325,13 +340,6 @@ util::ErrorEnum ModelImportExporter::ImportDirectoryArchive(const std::string& t
             }
         }
 
-        // Extract alg_code from sub_dir_name (format: prod_BM1688_{alg_code}_...)
-        std::string sub_alg_code;
-        std::regex algPattern(cosmo::util::kPlatformDirRegex);
-        std::smatch matches;
-        if (std::regex_match(sub_dir_name, matches, algPattern) && matches.size() > 1) {
-            sub_alg_code = matches[1].str();
-        }
         if (!sub_alg_code.empty() && set_model_path_mapping_) {
             set_model_path_mapping_(sub_alg_code, dest_dir);
         }
@@ -417,17 +425,13 @@ util::ErrorEnum ModelImportExporter::ImportModel(const std::string& archivePath)
     const std::string models_dir = get_model_path_();
     int imported_count           = 0;
 
-    // Check if the extracted content is a flat structure
+    // Check if the extracted content is a flat structure.
     bool flat_structure = false;
     if (fs::exists(temp_dir + "/config.json")) {
-        for (const auto& f : fs::directory_iterator(temp_dir)) {
-            if (!f.is_regular_file())
-                continue;
-            auto ext = f.path().extension().string();
-            if (ext == cosmo::util::kModelFileExt || ext == ".bmodel" || ext == ".onnx") {
-                flat_structure = true;
-                break;
-            }
+        std::string flat_alg_code;
+        flat_structure = ValidateImportedModelPackage(temp_dir, flat_alg_code);
+        if (!flat_structure) {
+            LOG_WARN("{}", "[ImportModel] Flat archive config/artifacts do not match the compiled platform");
         }
     }
 

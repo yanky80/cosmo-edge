@@ -43,6 +43,10 @@ static constexpr const char* kEngineType = "BM1688";
 /// Model binary file extension for Sophon backend (.nn wraps .bmodel).
 static constexpr const char* kModelFileExt = ".nn";
 
+/// Compatibility extensions accepted when resolving legacy Sophon model packages
+/// that predate config.json models[].file_name.
+static constexpr const char* kCompatibleModelFileExts[] = {".nn", ".bmodel"};
+
 /// Supported Sophon chip types, as written to config.json "chip_type".
 /// Add a new chip here to support it across the model pipeline.
 static constexpr const char* kSupportedChips[] = {"BM1688", "CV186X"};
@@ -65,6 +69,10 @@ static constexpr const char* kEngineType = "X86";
 /// Model binary file extension for CPU backend (.onnx used directly).
 static constexpr const char* kModelFileExt = ".onnx";
 
+/// Compatibility extensions accepted when resolving legacy x86 model packages
+/// that predate config.json models[].file_name.
+static constexpr const char* kCompatibleModelFileExts[] = {".onnx"};
+
 /// Supported platform identifier for the CPU backend.
 static constexpr const char* kSupportedChips[] = {"X86"};
 
@@ -81,6 +89,16 @@ inline bool IsSupportedChip(const std::string& chip) {
     for (const char* supported : kSupportedChips) {
         std::string s(supported);
         if (s.size() == chip.size() && std::equal(s.begin(), s.end(), chip.begin(), iequal))
+            return true;
+    }
+    return false;
+}
+
+/// Returns true when `extension` belongs to the compiled platform's model-artifact
+/// profile. Used by import and managed-path lookup to reject cross-platform files.
+inline bool IsSupportedModelFileExtension(const std::string& extension) {
+    for (const char* supported : kCompatibleModelFileExts) {
+        if (extension == supported)
             return true;
     }
     return false;
