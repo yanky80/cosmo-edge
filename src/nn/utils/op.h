@@ -146,6 +146,24 @@ public:
     std::vector<float> stride{};
 };
 
+class PUBLIC Yolo26RawPost : public Op {
+public:
+    explicit Yolo26RawPost(const std::string name_ = "yolo26_raw_postprocess");
+
+    virtual ~Yolo26RawPost();
+
+    virtual std::string Description() override;
+
+    float nms_threshold      = 0.45f;
+    float nms_detection_conf = 0.25f;
+    int top_k                = 300;
+    int reg_max              = 1;
+    int input_width          = 0;
+    int input_height         = 0;
+    std::vector<float> output_scales{};
+    std::vector<int> output_zero_points{};
+};
+
 class PUBLIC AffineCrop : public Op {
 public:
     explicit AffineCrop(const std::string name_ = "affine_crop");

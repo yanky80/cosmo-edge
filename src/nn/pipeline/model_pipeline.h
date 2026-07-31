@@ -35,6 +35,8 @@ struct PUBLIC PipelineModelConfig {
         std::string name;
         DimsVector shape;
         int data_type = 0;
+        float scale = 0.0f;
+        int zero_point = 0;
     };
 
     std::vector<InputDef> inputs;

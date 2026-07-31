@@ -116,6 +116,22 @@ std::string YoloNpuPost::Description() {
     return stream.str();
 }
 
+Yolo26RawPost::Yolo26RawPost(const std::string name_) : Op(name_) {}
+Yolo26RawPost::~Yolo26RawPost() {}
+std::string Yolo26RawPost::Description() {
+    std::stringstream stream;
+    stream << "name: " << this->name << ","
+           << "nms_threshold: " << this->nms_threshold << ","
+           << "nms_detection_conf: " << this->nms_detection_conf << ","
+           << "top_k: " << this->top_k << ","
+           << "reg_max: " << this->reg_max << ","
+           << "input_width: " << this->input_width << ","
+           << "input_height: " << this->input_height << ","
+           << "output_scales: " << VectorToString<float>(this->output_scales) << ","
+           << "output_zero_points: " << VectorToString<int>(this->output_zero_points);
+    return stream.str();
+}
+
 AffineCrop::AffineCrop(const std::string name_) : Op(name_) {}
 AffineCrop::~AffineCrop() {}
 std::string AffineCrop::Description() {

@@ -354,6 +354,23 @@ namespace pipeline_utils {
         return op;
     }
 
+    std::unique_ptr<Yolo26RawPost> MakeYolo26RawPostOp(float nms_threshold, float conf_threshold,
+                                                       int top_k, int reg_max, int input_width,
+                                                       int input_height,
+                                                       const std::vector<float>& output_scales,
+                                                       const std::vector<int>& output_zero_points) {
+        auto op                = std::make_unique<Yolo26RawPost>("yolo26_raw_postprocess");
+        op->nms_threshold      = nms_threshold;
+        op->nms_detection_conf = conf_threshold;
+        op->top_k              = top_k;
+        op->reg_max            = reg_max;
+        op->input_width        = input_width;
+        op->input_height       = input_height;
+        op->output_scales      = output_scales;
+        op->output_zero_points = output_zero_points;
+        return op;
+    }
+
     std::unique_ptr<DinoEncoder> MakeDinoEncoderOp(int dst_width, int dst_height, bool is_bgr,
                                                    const std::vector<float>& mean,
                                                    const std::vector<float>& std_dev) {
@@ -481,6 +498,8 @@ namespace pipeline_utils {
                         const nlohmann::json* shape = FindObjectMember(out, "shape");
                         output.shape                = shape ? GetIntArray(*shape) : std::vector<int>();
                         output.data_type            = ReadInt(out, "data_type", 0);
+                        output.scale                = ReadFloat(out, "scale", 0.0f);
+                        output.zero_point           = ReadInt(out, "zero_point", 0);
                         model.outputs.push_back(output);
                     }
                 }

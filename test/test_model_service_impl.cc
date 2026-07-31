@@ -44,6 +44,39 @@ static std::string CreateTestModelOnDisk(const std::string& modelsDir, const std
     return modelDir;
 }
 
+static std::string MakeYolo26RawConfigJson(bool include_quant = true) {
+    const std::string reg_quant = include_quant ? R"(, "scale": 0.5, "zero_point": 0)" : "";
+    const std::string cls_quant = include_quant ? R"(, "scale": 0.1, "zero_point": 0)" : "";
+
+    return R"({
+        "algorithm_code": "test_model_001",
+        "chip_type": "RK3588",
+        "model_type": "yolo26_det",
+        "version": "1.0",
+        "models": [{
+            "name": "TestModel",
+            "params": {
+                "input_size": [640, 640],
+                "output_format": "yolo26_raw",
+                "confidence_threshold": 0.25,
+                "nms_threshold": 0.45,
+                "top_k": 300,
+                "reg_max": 1
+            },
+            "inputs": [{"name": "images", "shape": [1, 3, 640, 640], "data_type": 0}],
+            "outputs": [
+                {"name": "reg0", "shape": [1, 4, 80, 80], "data_type": 5)" + reg_quant + R"(},
+                {"name": "cls0", "shape": [1, 1, 80, 80], "data_type": 5)" + cls_quant + R"(},
+                {"name": "reg1", "shape": [1, 4, 40, 40], "data_type": 5)" + reg_quant + R"(},
+                {"name": "cls1", "shape": [1, 1, 40, 40], "data_type": 5)" + cls_quant + R"(},
+                {"name": "reg2", "shape": [1, 4, 20, 20], "data_type": 5)" + reg_quant + R"(},
+                {"name": "cls2", "shape": [1, 1, 20, 20], "data_type": 5)" + cls_quant + R"(}
+            ]
+        }],
+        "labels": [{"id": "0", "name": "person", "threshold": [0.8, 0.5]}]
+    })";
+}
+
 TEST_CASE("ModelServiceImpl: 模型服务核心逻辑", "[model-service]") {
     // 设置测试专用的隔离目录
     std::string testBaseDir =
@@ -222,6 +255,21 @@ TEST_CASE("ModelServiceImpl: 模型服务核心逻辑", "[model-service]") {
             REQUIRE(updatedJson.find("SavedModel") != std::string::npos);
             REQUIRE(isExportable);
             REQUIRE(defaultCfgJson.empty());
+        }
+
+        SECTION("SaveModelConfig accepts YOLO26 raw-head output contracts") {
+            ALLOW_CALL(mocks.algSvc, GetAlgorithmsByModelId("test_model_001"))
+                .RETURN(std::vector<std::string>{});
+            ALLOW_CALL(mocks.cameraSvc, NotifyAlgorithmsChanged(trompeloeil::_, true));
+
+            REQUIRE(sut.SaveModelConfig("test_model_001", MakeYolo26RawConfigJson()) ==
+                    cosmo::util::ErrorEnum::Success);
+        }
+
+        SECTION("SaveModelConfig rejects YOLO26 raw-head outputs without affine quant metadata") {
+            REQUIRE_THROWS_WITH(sut.SaveModelConfig("test_model_001", MakeYolo26RawConfigJson(false)),
+                                Catch::Matchers::ContainsSubstring(
+                                    "YOLO26 raw-head 输出数量、shape、类型或量化信息不匹配"));
         }
 
         SECTION("QueryModels 流程") {

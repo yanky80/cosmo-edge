@@ -29,6 +29,37 @@ static bool ReadYoloNpuPostParams(const nlohmann::json& json,
     return true;
 }
 
+static bool ReadYolo26RawPostParams(const PipelineModelConfig& model_config, const nlohmann::json& json,
+                                    float& nms_thresh, float& conf_thresh, int& top_k, int& reg_max,
+                                    int& input_width, int& input_height, std::vector<float>& output_scales,
+                                    std::vector<int>& output_zero_points) {
+    nms_thresh  = pipeline_utils::ReadFloat(json, "nms_threshold", 0.45f);
+    conf_thresh = pipeline_utils::ReadFloat(json, "confidence_threshold", 0.25f);
+    top_k       = pipeline_utils::ReadInt(json, "top_k", 300);
+    reg_max     = pipeline_utils::ReadInt(json, "reg_max", 1);
+
+    std::vector<int> input_size = pipeline_utils::ReadIntArray(json, "input_size", {}, 2);
+    if (input_size.size() >= 2) {
+        input_width  = input_size[0];
+        input_height = input_size[1];
+    }
+
+    if (reg_max != 1 || model_config.outputs.size() != 6)
+        return false;
+
+    output_scales.clear();
+    output_zero_points.clear();
+    output_scales.reserve(model_config.outputs.size());
+    output_zero_points.reserve(model_config.outputs.size());
+    for (const auto& output : model_config.outputs) {
+        if (output.data_type != DATA_TYPE_INT8 || output.scale <= 0.0f)
+            return false;
+        output_scales.push_back(output.scale);
+        output_zero_points.push_back(output.zero_point);
+    }
+    return true;
+}
+
 static std::vector<std::unique_ptr<Op>> MakeDetPreprocess(const nlohmann::json& p) {
     std::vector<std::unique_ptr<Op>> ops;
 
@@ -286,7 +317,10 @@ Status Yolo26DetPipeline::Init(const PipelineConfig& config, const std::string& 
         }
 
         float conf_thresh = pipeline_utils::ReadFloat(p, "confidence_threshold", 0.25f);
+        float nms_thresh  = pipeline_utils::ReadFloat(p, "nms_threshold", 0.45f);
         int top_k         = pipeline_utils::ReadInt(p, "top_k", 300);
+        std::string output_format =
+            pipeline_utils::ReadString(p, "output_format", std::string("yolo_e2e"));
 
         // Extract input size for coordinate denormalization
         int e2e_input_w = 640, e2e_input_h = 640;
@@ -302,8 +336,24 @@ Status Yolo26DetPipeline::Init(const PipelineConfig& config, const std::string& 
             output.name      = out_def.name;
             output.shape     = out_def.shape;
             output.data_type = out_def.data_type;
-            if (i == 0)
-                output.op = pipeline_utils::MakeYoloE2EPostOp(conf_thresh, top_k, e2e_input_w, e2e_input_h);
+            if (i == 0) {
+                if (output_format == "yolo26_raw") {
+                    int reg_max = 1;
+                    std::vector<float> output_scales;
+                    std::vector<int> output_zero_points;
+                    if (!ReadYolo26RawPostParams(mc, p, nms_thresh, conf_thresh, top_k, reg_max,
+                                                 e2e_input_w, e2e_input_h, output_scales,
+                                                 output_zero_points)) {
+                        return Status(COSMO_NN_ERR_PARAM, "Invalid yolo26_raw output contract");
+                    }
+                    output.op = pipeline_utils::MakeYolo26RawPostOp(nms_thresh, conf_thresh, top_k, reg_max,
+                                                                    e2e_input_w, e2e_input_h,
+                                                                    output_scales, output_zero_points);
+                } else {
+                    output.op =
+                        pipeline_utils::MakeYoloE2EPostOp(conf_thresh, top_k, e2e_input_w, e2e_input_h);
+                }
+            }
             model.output_node_infos.push_back(std::move(output));
         }
         model_info_.models.push_back(std::move(model));
