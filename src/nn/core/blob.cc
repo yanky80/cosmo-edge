@@ -21,6 +21,11 @@ std::string BlobDesc::description() {
     }
     os << "]";
 
+    if (is_affine_quantized) {
+        os << " affine scale: " << affine_scale;
+        os << " zero point: " << affine_zero_point;
+    }
+
     return os.str();
 }
 

@@ -36,6 +36,13 @@ inline bool UsesHostMemory(DeviceType device_type) {
     return device_type == DEVICE_NAIVE || device_type == DEVICE_CPU;
 }
 
+inline bool NeedsCopyNode(DeviceType producer_device_type, DeviceType consumer_device_type) {
+    if (producer_device_type == consumer_device_type)
+        return false;
+
+    return UsesHostMemory(producer_device_type) != UsesHostMemory(consumer_device_type);
+}
+
 struct PUBLIC BackendConfig {
     DeviceType device_type = DEVICE_SOPHON_TPU;
     int device_id          = 0;

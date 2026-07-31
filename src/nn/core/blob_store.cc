@@ -89,6 +89,8 @@ Status BlobStore::FreeBlob(std::shared_ptr<Blob>& blob) {
     auto handle = blob->GetHandle();
     if (!handle.base)
         return COSMO_NN_OK;  // Skip if never allocated / already freed
+    if (handle.ownership == BLOB_HANDLE_EXTERNAL_OWNED)
+        return COSMO_NN_OK;
 
     auto desc        = blob->GetBlobDesc();
     auto device_type = desc.device_type;
@@ -118,6 +120,14 @@ Status BlobStore::AllocaBlob(std::shared_ptr<Blob>& blob) {
 
     auto desc        = blob->GetBlobDesc();
     auto handle      = blob->GetHandle();
+    if (handle.ownership == BLOB_HANDLE_EXTERNAL_OWNED) {
+        if (!handle.base)
+            return Status(COSMO_NN_ERR_INVALID_INPUT, "external-owned blob is unbound");
+        return COSMO_NN_OK;
+    }
+    if (handle.base)
+        return COSMO_NN_OK;
+
     auto device_type = desc.device_type;
     if (device_type == DEVICE_NAIVE) {
         BlobMemorySizeInfo size_info = host_device->Calculate(desc);

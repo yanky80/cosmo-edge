@@ -514,6 +514,10 @@ DeviceType SophonNetNode::GetTopBlobDeviceType() {
     return output_to_cpu_ ? DeviceType::DEVICE_NAIVE : DeviceType::DEVICE_SOPHON_TPU;
 }
 
+DeviceType SophonNetNode::GetInputBlobDeviceType() {
+    return DeviceType::DEVICE_SOPHON_TPU;
+}
+
 size_t SophonNetNode::GetTopCount() {
     return top_count;
 }
@@ -780,6 +784,20 @@ Status SophonNetNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_blobs,
 
     timer.Stop();
     return COSMO_NN_OK;
+}
+
+void SophonNetNode::UpdateTopBlobDesc(size_t index, BlobDesc& desc) const {
+    if (m_netinfo == nullptr || index >= static_cast<size_t>(m_netinfo->output_num))
+        return;
+
+    const auto output_dtype = m_netinfo->output_dtypes[index];
+    if (output_to_cpu_ || (output_dtype != BM_INT8 && output_dtype != BM_UINT8))
+        return;
+
+    desc.is_affine_quantized = true;
+    desc.affine_scale =
+        m_netinfo->output_scales != nullptr ? m_netinfo->output_scales[index] : 1.0f;
+    desc.affine_zero_point = 0;
 }
 
 }  // namespace cosmo::nn

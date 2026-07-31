@@ -63,6 +63,7 @@ Status Graph::Init(CombinedModelInfo& info, const std::string& model_path, Devic
 
     RETURN_ON_FAIL(LoadWeight(model_path));
     RETURN_ON_FAIL(InferTopDesc());
+    RETURN_ON_FAIL(BindNetInputs());
 
     if (profiler)
         profiler->ReportGraphInfo(Dump().c_str());
@@ -305,6 +306,10 @@ Status Graph::WireNetNode(const ModelInfo& model, const std::vector<std::string>
     // add net node
     int count     = NodeTypeUtils::TypedNodeCount(nodes, NodeType::NODE_NET);
     auto net_node = NodeTypeUtils::CreateNode(NODE_NET, count, max_batch_size, device_type_);
+    auto* net_ptr = dynamic_cast<NetNode*>(net_node.get());
+    if (!net_ptr) {
+        return Status(COSMO_NN_ERR_NODE_CREATE, "Failed to cast to NetNode");
+    }
 
     // Set NetNode's bottom blobs
     std::vector<std::string> net_bottom_blobs;
@@ -356,17 +361,17 @@ Status Graph::WireNetNode(const ModelInfo& model, const std::vector<std::string>
             }
         }
 
-        if (producer_node && producer_node->GetTopBlobDeviceType() == DEVICE_NAIVE &&
-            !UsesHostMemory(device_type_)) {
-            // This input is from NAIVE device, insert a H2D copy node (Sophon only)
+        if (producer_node && net_ptr &&
+            NeedsCopyNode(producer_node->GetTopBlobDeviceType(), net_ptr->GetInputBlobDeviceType())) {
             auto copy_node = NodeTypeUtils::CreateNode(NODE_COPY, copy_count, max_batch_size, device_type_);
             copy_count++;
 
             auto* copy_ptr = dynamic_cast<CopyNode*>(copy_node.get());
             if (!copy_ptr) {
-                return Status(COSMO_NN_ERR_NODE_CREATE, "Failed to create H2D copy node");
+                return Status(COSMO_NN_ERR_NODE_CREATE, "Failed to create input copy node");
             }
-            copy_ptr->SetDirection(0, 1);
+            copy_ptr->SetDirection(UsesHostMemory(producer_node->GetTopBlobDeviceType()) ? 0 : 1,
+                                   UsesHostMemory(net_ptr->GetInputBlobDeviceType()) ? 0 : 1);
 
             copy_node->SetBottomBlobNames({blob_name});
             AddNodeTopBlobs(copy_node.get());
@@ -404,10 +409,6 @@ Status Graph::WireNetNode(const ModelInfo& model, const std::vector<std::string>
     net_node->SetBottomBlobNames(final_net_bottom_blobs);
 
     // set network actual input/output names
-    auto* net_ptr = dynamic_cast<NetNode*>(net_node.get());
-    if (!net_ptr) {
-        return Status(COSMO_NN_ERR_NODE_CREATE, "Failed to cast to NetNode");
-    }
     net_ptr->SetNetworkInputNames(actual_input_names);
     net_ptr->SetNetworkOutputNames(actual_output_names);
 
@@ -426,7 +427,8 @@ Status Graph::WireNetNode(const ModelInfo& model, const std::vector<std::string>
                             o.op->name == "yolo_e2e_postprocess");
         });
 
-    bool is_host_memory_device = UsesHostMemory(device_type_);
+    const DeviceType net_output_device_type = net_ptr->GetTopBlobDeviceType();
+    bool is_host_memory_device              = UsesHostMemory(net_output_device_type);
 
     if (is_host_memory_device) {
         // Host-memory backends copy network outputs into graph-owned host blobs.
@@ -909,6 +911,12 @@ Status Graph::InferTopDesc() {
             desc.dims        = top_blob_dims.at(i);
             desc.data_type   = top_data_types.at(i);
             desc.device_type = node->GetTopBlobDeviceType();
+            desc.is_affine_quantized = false;
+            desc.affine_scale        = 1.0f;
+            desc.affine_zero_point   = 0;
+
+            if (auto* net_node = dynamic_cast<NetNode*>(node.get()))
+                net_node->UpdateTopBlobDesc(i, desc);
 
             if (desc.dims.empty()) {
                 return Status(COSMO_NN_ERR_PARAM, "Top blob " + top_blob_names.at(i) +
@@ -920,6 +928,25 @@ Status Graph::InferTopDesc() {
 
         node_idx++;
     }
+    return COSMO_NN_OK;
+}
+
+Status Graph::BindNetInputs() {
+    for (auto& node : nodes) {
+        auto* net_node = dynamic_cast<NetNode*>(node.get());
+        if (!net_node)
+            continue;
+
+        std::vector<std::shared_ptr<Blob>> bottom_blobs;
+        blob_store->GetBlobs(net_node->GetBottomBlobNames(), bottom_blobs);
+        if (bottom_blobs.size() != net_node->GetBottomBlobNames().size()) {
+            return Status(COSMO_NN_ERR_NULL_PARAM,
+                          "Graph failed to bind net inputs because a bottom blob is missing");
+        }
+
+        RETURN_ON_FAIL(net_node->BindInputBlobs(bottom_blobs));
+    }
+
     return COSMO_NN_OK;
 }
 

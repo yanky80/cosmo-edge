@@ -58,6 +58,8 @@ private:
 
     Status InferTopDesc();
 
+    Status BindNetInputs();
+
     Status AddCombinedModelNode(CombinedModelInfo&);
 
     void AddInputNodeIfNecessary(Node*);

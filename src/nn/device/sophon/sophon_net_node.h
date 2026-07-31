@@ -25,6 +25,7 @@ public:
     virtual ~SophonNetNode();
 
     virtual DeviceType GetTopBlobDeviceType() override;
+    DeviceType GetInputBlobDeviceType() override;
 
     virtual Status InferTopShapes() override;
 
@@ -42,6 +43,8 @@ public:
 
     virtual Status Forward(std::vector<std::shared_ptr<Blob>>& bottom_blobs,
                            std::vector<std::shared_ptr<Blob>>& top_blobs) override;
+
+    void UpdateTopBlobDesc(size_t index, BlobDesc& desc) const override;
 
 private:
     void ModelDescInfo(const bm_net_info_t* modelDesc);

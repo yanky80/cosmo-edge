@@ -133,3 +133,44 @@ TEST_CASE("BlobStore: FreeBlob on a self-owning blob does not double-free", "[Bl
     // Repeat free is a no-op; blob destruction (~BlobImpl) must not re-free.
     REQUIRE(bool(store.FreeBlob(blob)));
 }
+
+TEST_CASE("BlobStore: external-owned blobs are not allocated by the store", "[BlobStore]") {
+    BlobStore store(DEVICE_NAIVE, 0);
+
+    auto desc              = MakeNaiveFloatDesc("external_input");
+    auto external_backing  = std::make_unique<float[]>(4);
+    BlobHandle ext_handle{};
+    ext_handle.base      = external_backing.get();
+    ext_handle.ownership = BLOB_HANDLE_EXTERNAL_OWNED;
+
+    auto blob = std::make_shared<Blob>(desc, ext_handle);
+    store.AddBlob(blob);
+
+    REQUIRE(bool(store.AllocaBlob(blob)));
+    CHECK(blob->GetHandle().base == external_backing.get());
+    CHECK(blob->GetHandle().ownership == BLOB_HANDLE_EXTERNAL_OWNED);
+}
+
+TEST_CASE("BlobStore: external-owned blobs are not freed by the store", "[BlobStore]") {
+    auto external_backing = std::make_unique<float[]>(4);
+
+    std::shared_ptr<Blob> blob;
+    {
+        BlobStore store(DEVICE_NAIVE, 0);
+
+        auto desc              = MakeNaiveFloatDesc("external_output");
+        BlobHandle ext_handle{};
+        ext_handle.base      = external_backing.get();
+        ext_handle.ownership = BLOB_HANDLE_EXTERNAL_OWNED;
+
+        blob = std::make_shared<Blob>(desc, ext_handle);
+        store.AddBlob(blob);
+
+        REQUIRE(bool(store.FreeBlob(blob)));
+        CHECK(blob->GetHandle().base == external_backing.get());
+    }
+
+    REQUIRE(blob != nullptr);
+    CHECK(blob->GetHandle().base == external_backing.get());
+    CHECK(blob->GetHandle().ownership == BLOB_HANDLE_EXTERNAL_OWNED);
+}

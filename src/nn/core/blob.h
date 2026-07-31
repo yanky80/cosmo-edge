@@ -22,12 +22,22 @@ struct PUBLIC BlobDesc {
 
     std::string name = "";
 
+    bool is_affine_quantized = false;
+    float affine_scale       = 1.0f;
+    int affine_zero_point    = 0;
+
     std::string description();
 };
+
+typedef enum {
+    BLOB_HANDLE_STORE_OWNED = 0,
+    BLOB_HANDLE_EXTERNAL_OWNED,
+} BlobHandleOwnership;
 
 struct PUBLIC BlobHandle {
     void* base        = nullptr;
     unsigned long phy = 0;
+    BlobHandleOwnership ownership = BLOB_HANDLE_STORE_OWNED;
 };
 
 class BlobImpl;
