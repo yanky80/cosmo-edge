@@ -100,8 +100,6 @@ namespace Model {
         friend void from_json(const nlohmann::json& j, ModelArtifactInfo& v);
     };
 
-    using BmodelFileInfo = ModelArtifactInfo;
-
     // Add atomic model (AIBox platform)
     struct MsgAddRecv : public MsgRecvHead {
         std::string modelCode;

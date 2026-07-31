@@ -14,7 +14,7 @@
 #include <regex>
 #include <sstream>
 
-#include "infer/BmodelTool.h"
+#include "infer/ModelArtifactTool.h"
 #include "nlohmann/json.hpp"
 #include "util/ErrorCode.h"
 #include "util/Exception.h"
@@ -174,9 +174,9 @@ util::ErrorEnum ModelImportExporter::ConfigureOcrCharacterTable(
 
 util::ErrorEnum ModelImportExporter::ValidateAddModelInputs(
     const std::string& modelCode, const std::string& modelName, const std::string& modelType,
-    const std::vector<cosmo::Model::BmodelFileInfo>& bmodel_files, const std::string& vocabFilePath,
+    const std::vector<cosmo::Model::ModelArtifactInfo>& model_files, const std::string& vocabFilePath,
     const std::string& tokenizerFilePath, const std::string& characterTableFilePath,
-    std::string& resolved_model_code, std::vector<std::string>& bmodel_paths) {
+    std::string& resolved_model_code, std::vector<std::string>& model_artifact_paths) {
     namespace fs = std::filesystem;
 
     resolved_model_code = generate_unique_model_code_();
@@ -196,19 +196,19 @@ util::ErrorEnum ModelImportExporter::ValidateAddModelInputs(
         return util::ErrorEnum::InvalidParam;
     }
 
-    // 2. Validate bmodel files
-    if (bmodel_files.empty()) {
-        LOG_WARN("{}", "[AddModel] No bmodel files provided");
+    // 2. Validate model artifacts
+    if (model_files.empty()) {
+        LOG_WARN("{}", "[AddModel] No model artifacts provided");
         return util::ErrorEnum::InvalidParam;
     }
 
     bool is_sam2 = (modelType == "sam2");
-    if (is_sam2 && bmodel_files.size() != 2) {
-        LOG_WARN("{}", "[AddModel] SAM2 model requires exactly 2 bmodel files (encoder and decoder)");
+    if (is_sam2 && model_files.size() != 2) {
+        LOG_WARN("{}", "[AddModel] SAM2 model requires exactly 2 model artifacts (encoder and decoder)");
         return util::ErrorEnum::InvalidParam;
     }
-    if (!is_sam2 && bmodel_files.size() != 1) {
-        LOG_WARN("{}", "[AddModel] Non-SAM2 model must have exactly 1 bmodel file");
+    if (!is_sam2 && model_files.size() != 1) {
+        LOG_WARN("{}", "[AddModel] Non-SAM2 model must have exactly 1 model artifact");
         return util::ErrorEnum::InvalidParam;
     }
 
@@ -243,45 +243,44 @@ util::ErrorEnum ModelImportExporter::ValidateAddModelInputs(
         return util::ErrorEnum::InvalidParam;
     }
 
-    // Check all bmodel files exist
-    for (const auto& bmodelFile : bmodel_files) {
+    // Check all model artifacts exist
+    for (const auto& model_file : model_files) {
         std::string resolved_path;
-        if (!ResolveManagedUploadFile(bmodelFile.filePath, resolved_path)) {
-            LOG_WARN("[AddModel] bmodel file is not a managed upload: {}", bmodelFile.filePath);
+        if (!ResolveManagedUploadFile(model_file.filePath, resolved_path)) {
+            LOG_WARN("[AddModel] model artifact is not a managed upload: {}", model_file.filePath);
             return util::ErrorEnum::FileNotExist;
         }
-        bmodel_paths.push_back(std::move(resolved_path));
-        LOG_INFO("[AddModel] bmodel file: role={}, path={}", bmodelFile.role, bmodel_paths.back());
+        model_artifact_paths.push_back(std::move(resolved_path));
+        LOG_INFO("[AddModel] model artifact: role={}, path={}", model_file.role, model_artifact_paths.back());
     }
 
     return util::ErrorEnum::Success;
 }
 
-util::ErrorEnum ModelImportExporter::CollectBmodelInfo(const std::string& modelType,
-                                                       const std::vector<std::string>& bmodel_paths,
-                                                       std::vector<cosmo::BmodelInfo>& bmodel_infos,
-                                                       bool& use_template_defaults) {
+util::ErrorEnum ModelImportExporter::CollectModelArtifactInfo(
+    const std::string& modelType, const std::vector<std::string>& model_artifact_paths,
+    std::vector<cosmo::BmodelInfo>& artifact_infos, bool& use_template_defaults) {
     use_template_defaults = (modelType == "qwen3vl" || modelType == "qwen3_5");
 
     if (!use_template_defaults) {
-        for (const auto& bmodelPath : bmodel_paths) {
-            auto info = cosmo::BmodelTool::GetBmodelInfo(bmodelPath);
+        for (const auto& model_artifact_path : model_artifact_paths) {
+            auto info = cosmo::ModelArtifactTool::GetModelArtifactInfo(model_artifact_path);
             if (!info.valid && info.error_msg != "SDK_NOT_AVAILABLE") {
-                LOG_WARN("[AddModel] Failed to get bmodel info: {}", info.error_msg);
+                LOG_WARN("[AddModel] Failed to inspect model artifact: {}", info.error_msg);
                 return util::ErrorEnum::InvalidParam;
             }
-            bmodel_infos.push_back(info);
+            artifact_infos.push_back(info);
         }
 
-        if (!bmodel_infos.empty() && !bmodel_infos[0].valid &&
-            bmodel_infos[0].error_msg == "SDK_NOT_AVAILABLE") {
+        if (!artifact_infos.empty() && !artifact_infos[0].valid &&
+            artifact_infos[0].error_msg == "SDK_NOT_AVAILABLE") {
             use_template_defaults = true;
             LOG_INFO("{}", "[AddModel] SDK not available, using template defaults");
         }
 
-        for (size_t bi = 0; bi < bmodel_infos.size(); bi++) {
-            std::string prefix = "[AddModel] bmodel[" + std::to_string(bi) + "]";
-            cosmo::BmodelTool::LogBmodelInfo(bmodel_infos[bi], prefix);
+        for (size_t index = 0; index < artifact_infos.size(); index++) {
+            std::string prefix = "[AddModel] modelArtifact[" + std::to_string(index) + "]";
+            cosmo::ModelArtifactTool::LogModelArtifactInfo(artifact_infos[index], prefix);
         }
     }
 
@@ -321,9 +320,9 @@ std::string ModelImportExporter::CalculateNextVersion(const std::string& models_
     return "V" + std::to_string(major) + ".0." + std::to_string(minor);
 }
 
-util::ErrorEnum ModelImportExporter::WriteNnFile(const std::string& modelType,
-                                                 const std::vector<std::string>& bmodel_paths,
-                                                 const std::string& model_dir) {
+util::ErrorEnum ModelImportExporter::InstallModelArtifacts(
+    const std::string& modelType, const std::vector<std::string>& model_artifact_paths,
+    const std::string& model_dir) {
     namespace fs = std::filesystem;
 
 #ifdef COSMO_NN_USE_ONNX_BACKEND
@@ -331,10 +330,10 @@ util::ErrorEnum ModelImportExporter::WriteNnFile(const std::string& modelType,
     std::string convert_error;
     if (modelType == "sam2") {
         const std::vector<std::string> dest_names = {"sam2_encoder.onnx", "sam2_decoder.onnx"};
-        for (size_t i = 0; i < dest_names.size() && i < bmodel_paths.size(); i++) {
+        for (size_t i = 0; i < dest_names.size() && i < model_artifact_paths.size(); i++) {
             std::error_code ec;
             std::string dest_path = (fs::path(model_dir) / dest_names[i]).string();
-            fs::copy_file(bmodel_paths[i], dest_path, fs::copy_options::overwrite_existing, ec);
+            fs::copy_file(model_artifact_paths[i], dest_path, fs::copy_options::overwrite_existing, ec);
             if (ec) {
                 convert_error = "Failed to copy SAM2 ONNX file to " + dest_path + ": " + ec.message();
                 break;
@@ -344,26 +343,26 @@ util::ErrorEnum ModelImportExporter::WriteNnFile(const std::string& modelType,
     } else {
         std::string model_file_path = model_dir + "/model.onnx";
         std::error_code ec;
-        fs::copy_file(bmodel_paths[0], model_file_path, fs::copy_options::overwrite_existing, ec);
+        fs::copy_file(model_artifact_paths[0], model_file_path, fs::copy_options::overwrite_existing, ec);
         if (ec)
             convert_error = "Failed to copy model file to " + model_file_path + ": " + ec.message();
         else
             LOG_INFO("[AddModel] x86: copied model file to {}", model_file_path);
     }
 #else
-    // Sophon: wrap bmodel(s) into .nn format
+    // Sophon: wrap backend artifacts into .nn format
     std::string nn_path = model_dir + "/model.nn";
 
     std::string convert_error;
     if (modelType == "qwen3vl" || modelType == "qwen3_5") {
         std::error_code ec;
-        fs::copy_file(bmodel_paths[0], nn_path, fs::copy_options::overwrite_existing, ec);
+        fs::copy_file(model_artifact_paths[0], nn_path, fs::copy_options::overwrite_existing, ec);
         if (ec)
-            convert_error = "Failed to copy bmodel to model.nn: " + ec.message();
+            convert_error = "Failed to copy model artifact to model.nn: " + ec.message();
         else
-            LOG_INFO("[AddModel] qwen3vl: copied raw bmodel to {} (no nn wrapper header)", nn_path);
+            LOG_INFO("[AddModel] qwen3vl: copied raw model artifact to {} (no nn wrapper header)", nn_path);
     } else {
-        convert_error = cosmo::BmodelTool::ConvertToNn(bmodel_paths, nn_path);
+        convert_error = cosmo::ModelArtifactTool::InstallModelArtifacts(model_artifact_paths, nn_path);
     }
 #endif
 
@@ -458,7 +457,7 @@ util::ErrorEnum ModelImportExporter::CopyAuxiliaryFiles(const std::string& model
 // ============================================================
 util::ErrorEnum ModelImportExporter::AddAtomicModel(
     const std::string& modelCode, const std::string& modelName, const std::string& modelType,
-    const std::string& description, const std::vector<cosmo::Model::BmodelFileInfo>& bmodel_files,
+    const std::string& description, const std::vector<cosmo::Model::ModelArtifactInfo>& model_files,
     const std::string& vocabFilePath, const std::string& tokenizerFilePath,
     const std::string& characterTableFilePath, const std::string& normalizationMode,
     const std::string& colorChannel) {
@@ -469,9 +468,9 @@ util::ErrorEnum ModelImportExporter::AddAtomicModel(
 
     // Collect temp files for cleanup
     std::vector<std::string> temp_files_to_cleanup;
-    for (const auto& bmodelFile : bmodel_files) {
-        if (!bmodelFile.filePath.empty())
-            temp_files_to_cleanup.push_back(bmodelFile.filePath);
+    for (const auto& model_file : model_files) {
+        if (!model_file.filePath.empty())
+            temp_files_to_cleanup.push_back(model_file.filePath);
     }
     if (!vocabFilePath.empty())
         temp_files_to_cleanup.push_back(vocabFilePath);
@@ -487,10 +486,11 @@ util::ErrorEnum ModelImportExporter::AddAtomicModel(
 
     // 1-2. Validate inputs
     std::string resolved_model_code;
-    std::vector<std::string> bmodel_paths;
+    std::vector<std::string> model_artifact_paths;
     auto err =
-        ValidateAddModelInputs(modelCode, modelName, modelType, bmodel_files, vocabFilePath,
-                               tokenizerFilePath, characterTableFilePath, resolved_model_code, bmodel_paths);
+        ValidateAddModelInputs(modelCode, modelName, modelType, model_files, vocabFilePath,
+                               tokenizerFilePath, characterTableFilePath, resolved_model_code,
+                               model_artifact_paths);
     if (err != util::ErrorEnum::Success)
         return cleanup_and_return(err);
 
@@ -531,15 +531,15 @@ util::ErrorEnum ModelImportExporter::AddAtomicModel(
         return cleanup_and_return(util::ErrorEnum::InvalidParam);
     }
 
-    // 4. Get bmodel info
+    // 4. Get model artifact info
     bool use_template_defaults = false;
-    std::vector<cosmo::BmodelInfo> bmodel_infos;
-    err = CollectBmodelInfo(modelType, bmodel_paths, bmodel_infos, use_template_defaults);
+    std::vector<cosmo::BmodelInfo> artifact_infos;
+    err = CollectModelArtifactInfo(modelType, model_artifact_paths, artifact_infos, use_template_defaults);
     if (err != util::ErrorEnum::Success)
         return cleanup_and_return(err);
 
     if (modelType == "ocr") {
-        err = ConfigureOcrCharacterTable(templateDoc, bmodel_infos, resolved_character_table_path);
+        err = ConfigureOcrCharacterTable(templateDoc, artifact_infos, resolved_character_table_path);
         if (err != util::ErrorEnum::Success)
             return cleanup_and_return(err);
     }
@@ -569,14 +569,14 @@ util::ErrorEnum ModelImportExporter::AddAtomicModel(
         return cleanup_and_return(util::ErrorEnum::SysErr);
     }
 
-    // 7. Write model.nn
-    err = WriteNnFile(modelType, bmodel_paths, model_dir);
+    // 7. Install backend model artifacts
+    err = InstallModelArtifacts(modelType, model_artifact_paths, model_dir);
     if (err != util::ErrorEnum::Success)
         return cleanup_and_return(err);
 
     // 8. Update template config
     UpdateTemplateConfig(templateDoc, resolved_model_code, version_str, modelName, modelType, description,
-                         bmodel_infos, use_template_defaults, normalizationMode, colorChannel);
+                         artifact_infos, use_template_defaults, normalizationMode, colorChannel);
 
     // 8.1 Validate model output format
     {

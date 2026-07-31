@@ -10,7 +10,7 @@
 #include <regex>
 #include <sstream>
 
-#include "infer/BmodelTool.h"
+#include "infer/ModelArtifactTool.h"
 #include "nlohmann/json.hpp"
 #include "util/ErrorCode.h"
 #include "util/Exception.h"

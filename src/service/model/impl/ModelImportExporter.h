@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "infer/BmodelTool.h"
+#include "infer/ModelArtifactTool.h"
 #include "nlohmann/json_fwd.hpp"
 #include "service/model/dto/ModelDto.h"
 #include "util/ErrorCode.h"
@@ -25,7 +25,7 @@ public:
 
     cosmo::util::ErrorEnum AddAtomicModel(const std::string& modelCode, const std::string& modelName,
                                           const std::string& modelType, const std::string& description,
-                                          const std::vector<cosmo::Model::BmodelFileInfo>& bmodelFiles,
+                                          const std::vector<cosmo::Model::ModelArtifactInfo>& modelFiles,
                                           const std::string& vocabFilePath,
                                           const std::string& tokenizerFilePath,
                                           const std::string& characterTableFilePath,
@@ -46,20 +46,20 @@ private:
     // --- AddAtomicModel helpers (extract method) ---
     cosmo::util::ErrorEnum ValidateAddModelInputs(
         const std::string& modelCode, const std::string& modelName, const std::string& modelType,
-        const std::vector<cosmo::Model::BmodelFileInfo>& bmodelFiles, const std::string& vocabFilePath,
+        const std::vector<cosmo::Model::ModelArtifactInfo>& modelFiles, const std::string& vocabFilePath,
         const std::string& tokenizerFilePath, const std::string& characterTableFilePath,
-        std::string& resolvedModelCode, std::vector<std::string>& bmodelPaths);
+        std::string& resolvedModelCode, std::vector<std::string>& modelArtifactPaths);
 
-    cosmo::util::ErrorEnum CollectBmodelInfo(const std::string& modelType,
-                                             const std::vector<std::string>& bmodelPaths,
-                                             std::vector<cosmo::BmodelInfo>& bmodelInfos,
-                                             bool& useTemplateDefaults);
+    cosmo::util::ErrorEnum CollectModelArtifactInfo(const std::string& modelType,
+                                                    const std::vector<std::string>& modelArtifactPaths,
+                                                    std::vector<cosmo::BmodelInfo>& artifactInfos,
+                                                    bool& useTemplateDefaults);
 
     std::string CalculateNextVersion(const std::string& modelsDir, const std::string& modelCode);
 
-    cosmo::util::ErrorEnum WriteNnFile(const std::string& modelType,
-                                       const std::vector<std::string>& bmodelPaths,
-                                       const std::string& modelDir);
+    cosmo::util::ErrorEnum InstallModelArtifacts(const std::string& modelType,
+                                                 const std::vector<std::string>& modelArtifactPaths,
+                                                 const std::string& modelDir);
 
     void UpdateTemplateConfig(nlohmann::json& templateDoc, const std::string& modelCode,
                               const std::string& versionStr, const std::string& modelName,

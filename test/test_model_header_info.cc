@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "catch_amalgamated.hpp"
-#include "infer/BmodelTool.h"
+#include "infer/ModelArtifactTool.h"
 #include "nn/utils/model_header_info.h"
 
 namespace fs = std::filesystem;
@@ -106,7 +106,8 @@ TEST_CASE("plain nn header allows segments larger than 512MB", "[model_header]")
         parse_result.header, static_cast<uint64_t>(cosmo::nn::kPlainNnHeaderSize) + large_segment_size));
 }
 
-TEST_CASE("BmodelTool ConvertToNn writes plain header and concatenated payloads", "[model_header]") {
+TEST_CASE("ModelArtifactTool InstallModelArtifacts writes plain header and concatenated payloads",
+          "[model_header]") {
     fs::path dir          = MakeTempDir("cosmo_model_header");
     fs::path first_model  = dir / "first.bmodel";
     fs::path second_model = dir / "second.bmodel";
@@ -115,8 +116,9 @@ TEST_CASE("BmodelTool ConvertToNn writes plain header and concatenated payloads"
     WriteBinaryFile(first_model, "abc");
     WriteBinaryFile(second_model, "defgh");
 
-    std::string error =
-        cosmo::BmodelTool::ConvertToNn({first_model.string(), second_model.string()}, output_model.string());
+    std::string error = cosmo::ModelArtifactTool::InstallModelArtifacts({first_model.string(),
+                                                                         second_model.string()},
+                                                                        output_model.string());
     REQUIRE(error.empty());
 
     std::vector<char> data = ReadBinaryFile(output_model);
@@ -138,13 +140,14 @@ TEST_CASE("BmodelTool ConvertToNn writes plain header and concatenated payloads"
     fs::remove_all(dir);
 }
 
-TEST_CASE("BmodelTool ConvertToNn refuses output that aliases an input", "[model_header]") {
+TEST_CASE("ModelArtifactTool InstallModelArtifacts refuses output that aliases an input", "[model_header]") {
     fs::path dir   = MakeTempDir("cosmo_model_header_alias");
     fs::path model = dir / "model.nn";
 
     WriteBinaryFile(model, "abc");
 
-    std::string error = cosmo::BmodelTool::ConvertToNn({model.string()}, model.string());
+    std::string error =
+        cosmo::ModelArtifactTool::InstallModelArtifacts({model.string()}, model.string());
     REQUIRE_FALSE(error.empty());
 
     std::vector<char> data = ReadBinaryFile(model);

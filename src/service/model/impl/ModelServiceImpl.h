@@ -67,7 +67,7 @@ public:
     cosmo::util::ErrorEnum ImportModel(const std::string& archivePath) override;
     cosmo::util::ErrorEnum AddAtomicModel(const std::string& modelCode, const std::string& modelName,
                                           const std::string& modelType, const std::string& description,
-                                          const std::vector<cosmo::Model::BmodelFileInfo>& bmodelFiles,
+                                          const std::vector<cosmo::Model::ModelArtifactInfo>& modelFiles,
                                           const std::string& vocabFilePath,
                                           const std::string& tokenizerFilePath,
                                           const std::string& characterTableFilePath,

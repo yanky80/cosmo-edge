@@ -231,7 +231,7 @@ TEST_CASE("Upload consumers enforce owner purpose and one-shot model paths", "[u
             .RETURN(util::ErrorEnum::Success);
 
         Model::MsgAddRecv request;
-        Model::BmodelFileInfo file;
+        Model::ModelArtifactInfo file;
         file.role     = "main";
         file.uploadId = model.upload_id;
         request.modelFiles.push_back(file);
@@ -254,10 +254,10 @@ TEST_CASE("Upload consumers enforce owner purpose and one-shot model paths", "[u
                                             service::UploadPurpose::kModelComponent, "other.bmodel", "b");
 
         Model::MsgAddRecv request;
-        Model::BmodelFileInfo encoder;
+        Model::ModelArtifactInfo encoder;
         encoder.role     = "encoder";
         encoder.uploadId = owner_upload.upload_id;
-        Model::BmodelFileInfo decoder;
+        Model::ModelArtifactInfo decoder;
         decoder.role        = "decoder";
         decoder.uploadId    = other_upload.upload_id;
         request.modelFiles = {encoder, decoder};
@@ -464,7 +464,7 @@ TEST_CASE("File-consuming context handlers reject MQTT path requests", "[upload-
     SECTION("model components") {
         MessageModelHandler handler(mocks.modelSvc);
         Model::MsgAddRecv request;
-        Model::BmodelFileInfo file;
+        Model::ModelArtifactInfo file;
         file.role     = "main";
         file.filePath = "/tmp/model.bmodel";
         request.modelFiles.push_back(file);

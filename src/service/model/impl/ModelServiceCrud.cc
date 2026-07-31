@@ -437,11 +437,11 @@ cosmo::util::ErrorEnum ModelServiceImpl::ImportModel(const std::string& archiveP
 
 cosmo::util::ErrorEnum ModelServiceImpl::AddAtomicModel(
     const std::string& modelCode, const std::string& modelName, const std::string& model_type,
-    const std::string& description, const std::vector<cosmo::Model::BmodelFileInfo>& bmodel_files,
+    const std::string& description, const std::vector<cosmo::Model::ModelArtifactInfo>& model_files,
     const std::string& vocabFilePath, const std::string& tokenizerFilePath,
     const std::string& characterTableFilePath, const std::string& normalizationMode,
     const std::string& colorChannel) {
-    return import_exporter_.AddAtomicModel(modelCode, modelName, model_type, description, bmodel_files,
+    return import_exporter_.AddAtomicModel(modelCode, modelName, model_type, description, model_files,
                                            vocabFilePath, tokenizerFilePath, characterTableFilePath,
                                            normalizationMode, colorChannel);
 }
