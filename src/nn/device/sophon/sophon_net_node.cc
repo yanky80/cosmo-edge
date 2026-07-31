@@ -786,6 +786,33 @@ Status SophonNetNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_blobs,
     return COSMO_NN_OK;
 }
 
+Status SophonNetNode::BindInputBlobs(std::vector<std::shared_ptr<Blob>>& bottom_blobs) {
+    if (m_netinfo == nullptr || m_netinfo->stages == nullptr || m_netinfo->stage_num <= 0 ||
+        m_netinfo->stages[0].input_mems == nullptr) {
+        return Status(COSMO_NN_ERR_GRAPH_NOT_INIT, "Sophon network input tensors are not initialized");
+    }
+    if (bottom_blobs.size() != static_cast<size_t>(m_netinfo->input_num) ||
+        input_tensors.size() != static_cast<size_t>(m_netinfo->input_num)) {
+        return Status(COSMO_NN_ERR_INVALID_INPUT, "Sophon input blob count does not match model input count");
+    }
+
+    for (int i = 0; i < m_netinfo->input_num; ++i) {
+        auto& bottom_blob = bottom_blobs.at(i);
+        if (!bottom_blob) {
+            return Status(COSMO_NN_ERR_INVALID_INPUT, "Sophon input blob is invalid");
+        }
+
+        input_tensors[i].device_mem = m_netinfo->stages[0].input_mems[i];
+
+        BlobHandle bound_handle{};
+        bound_handle.base      = &input_tensors[i].device_mem;
+        bound_handle.ownership = BLOB_HANDLE_EXTERNAL_OWNED;
+        bottom_blob->SetHandle(bound_handle);
+    }
+
+    return COSMO_NN_OK;
+}
+
 void SophonNetNode::UpdateTopBlobDesc(size_t index, BlobDesc& desc) const {
     if (m_netinfo == nullptr || index >= static_cast<size_t>(m_netinfo->output_num))
         return;

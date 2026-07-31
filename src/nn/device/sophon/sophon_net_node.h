@@ -44,6 +44,8 @@ public:
     virtual Status Forward(std::vector<std::shared_ptr<Blob>>& bottom_blobs,
                            std::vector<std::shared_ptr<Blob>>& top_blobs) override;
 
+    Status BindInputBlobs(std::vector<std::shared_ptr<Blob>>& bottom_blobs) override;
+
     void UpdateTopBlobDesc(size_t index, BlobDesc& desc) const override;
 
 private:
