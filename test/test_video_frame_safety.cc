@@ -5,6 +5,7 @@
 
 #include "catch_amalgamated.hpp"
 #include "media/EncodedImageInfo.h"
+#include "media/FrameSurface.h"
 #include "media/PixelFormatUtils.h"
 #include "media/VideoDecoder.h"
 #include "media/VideoFrame.h"
@@ -137,6 +138,120 @@ TEST_CASE("VideoFrame rejects unsafe dimensions before allocation", "[video-fram
     REQUIRE(oversized.GetWidth() == 0);
     REQUIRE(oversized.GetHeight() == 0);
     REQUIRE(oversized.GetSize() == 0);
+}
+
+TEST_CASE("FrameSurface rejects invalid metadata before VideoFrame wraps it",
+          "[video-frame-safety][frame-surface]") {
+    FrameSurface host_surface;
+    host_surface.memory_type = FrameSurfaceMemoryType::Host;
+    FramePlane host_plane;
+    host_plane.size  = 16;
+    host_plane.pitch = 4;
+    host_surface.planes.push_back(host_plane);
+    REQUIRE_FALSE(host_surface.IsValid());
+
+    FrameSurface dma_surface;
+    dma_surface.memory_type = FrameSurfaceMemoryType::DmaBuf;
+    FramePlane dma_plane;
+    dma_plane.virt_addr = reinterpret_cast<uint8_t*>(0x1);
+    dma_plane.size      = 16;
+    dma_plane.pitch     = 4;
+    dma_surface.planes.push_back(dma_plane);
+    REQUIRE_FALSE(dma_surface.IsValid());
+
+    FrameSurface bad_offsets;
+    bad_offsets.memory_type = FrameSurfaceMemoryType::Host;
+    FramePlane bad_offset_plane;
+    bad_offset_plane.virt_addr = reinterpret_cast<uint8_t*>(0x1);
+    bad_offset_plane.offset    = 8;
+    bad_offset_plane.pitch     = 9;
+    bad_offset_plane.size      = 16;
+    bad_offsets.planes.push_back(bad_offset_plane);
+    REQUIRE_FALSE(bad_offsets.IsValid());
+}
+
+TEST_CASE("VideoFrame wraps an external host surface without breaking host access",
+          "[video-frame-safety][frame-surface]") {
+    std::vector<uint8_t> storage(24, 0x5a);
+    auto surface              = std::make_shared<FrameSurface>();
+    surface->memory_type      = FrameSurfaceMemoryType::Host;
+    FramePlane plane;
+    plane.virt_addr = storage.data();
+    plane.pitch     = 4;
+    plane.size      = storage.size();
+    surface->planes.push_back(plane);
+
+    VideoFrame frame(4, 4, PixelFormat::PIXEL_I420, surface, 7, 99);
+    REQUIRE(frame.Active());
+    REQUIRE(frame.GetSurface() == surface);
+    REQUIRE(frame.GetSize() == storage.size());
+    REQUIRE(frame.GetData() == storage.data());
+    REQUIRE(frame.GetHostData() == storage.data());
+    REQUIRE(frame.GetFrameIndex() == 7);
+    REQUIRE(frame.GetTimestamp() == 99);
+}
+
+TEST_CASE("VideoFrame rejects undersized external surfaces", "[video-frame-safety][frame-surface]") {
+    std::vector<uint8_t> storage(8, 0x5a);
+    auto surface         = std::make_shared<FrameSurface>();
+    surface->memory_type = FrameSurfaceMemoryType::Host;
+    FramePlane plane;
+    plane.virt_addr = storage.data();
+    plane.pitch     = 4;
+    plane.size      = storage.size();
+    surface->planes.push_back(plane);
+
+    VideoFrame frame(4, 4, PixelFormat::PIXEL_I420, surface);
+    REQUIRE_FALSE(frame.Active());
+    REQUIRE(frame.GetData() == nullptr);
+}
+
+TEST_CASE("VideoFrame keeps external surface lifetime shared across consumers",
+          "[video-frame-safety][frame-surface]") {
+    auto storage         = std::make_shared<std::vector<uint8_t>>(24, 0x33);
+    std::weak_ptr<void> weak_storage = storage;
+    auto surface         = std::make_shared<FrameSurface>();
+    surface->memory_type = FrameSurfaceMemoryType::Host;
+    surface->lifetime    = storage;
+    FramePlane plane;
+    plane.virt_addr = storage->data();
+    plane.pitch     = 4;
+    plane.size      = storage->size();
+    surface->planes.push_back(plane);
+
+    auto frame    = std::make_shared<VideoFrame>(4, 4, PixelFormat::PIXEL_I420, surface, 1, 2);
+    auto consumer = frame->GetSurface();
+    storage.reset();
+    surface.reset();
+
+    REQUIRE_FALSE(weak_storage.expired());
+    frame.reset();
+    REQUIRE_FALSE(weak_storage.expired());
+    consumer.reset();
+    REQUIRE(weak_storage.expired());
+}
+
+TEST_CASE("VideoFrame move assignment transfers wrapped surface ownership once",
+          "[video-frame-safety][frame-surface]") {
+    auto storage    = std::make_shared<std::vector<uint8_t>>(24, 0x7c);
+    auto surface    = std::make_shared<FrameSurface>();
+    surface->memory_type = FrameSurfaceMemoryType::Host;
+    surface->lifetime    = storage;
+    FramePlane plane;
+    plane.virt_addr = storage->data();
+    plane.pitch     = 4;
+    plane.size      = storage->size();
+    surface->planes.push_back(plane);
+
+    VideoFrame src(4, 4, PixelFormat::PIXEL_I420, surface, 8, 11);
+    VideoFrame dst(-1, 2, PixelFormat::PIXEL_I420);
+    dst = std::move(src);
+
+    REQUIRE(dst.Active());
+    REQUIRE(dst.GetSurface() == surface);
+    REQUIRE(dst.GetData() == storage->data());
+    REQUIRE_FALSE(src.Active());
+    REQUIRE(src.GetSurface() == nullptr);
 }
 
 TEST_CASE("Crop ROI normalization safely clips and aligns recoverable input", "[video-frame-safety]") {
