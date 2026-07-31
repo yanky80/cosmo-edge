@@ -18,6 +18,7 @@ struct FramePlane {
     uint8_t* virt_addr   = nullptr;
     size_t offset        = 0;
     size_t pitch         = 0;
+    size_t vertical_stride = 0;
     size_t size          = 0;
 
     [[nodiscard]] bool IsValid(FrameSurfaceMemoryType memory_type) const {

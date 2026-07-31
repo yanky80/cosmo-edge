@@ -49,6 +49,7 @@ set(MEDIA_CPU_SRC
 
 set(MEDIA_RK3588_SRC
     VideoDecoderCreateRk3588.cc
+    VideoDecoderRk3588.cc        VideoDecoderRk3588.h
     VideoEncoderCreateRk3588.cc
     VideoFrameProcFactoryRk3588.cc
 )
