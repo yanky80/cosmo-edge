@@ -29,10 +29,10 @@ struct PUBLIC BlobDesc {
     std::string description();
 };
 
-typedef enum {
+enum BlobHandleOwnership {
     BLOB_HANDLE_STORE_OWNED = 0,
     BLOB_HANDLE_EXTERNAL_OWNED,
-} BlobHandleOwnership;
+};
 
 struct PUBLIC BlobHandle {
     void* base        = nullptr;
