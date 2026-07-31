@@ -73,7 +73,7 @@ gcc --version >/dev/null 2>/dev/null; ret=$?; if [[ 0 -ne $ret ]]; then
     fi
     exit $ret;
 fi
-aarch64-linux-gnu-g++ --version >/dev/null 2>/dev/null; ret=$?; if [[ 0 -ne $ret ]]; then
+${SRS_TOOL_CXX} --version >/dev/null 2>/dev/null; ret=$?; if [[ 0 -ne $ret ]]; then
     if [[ $OS_IS_CENTOS == YES ]]; then
         echo "Please install g++ by:"
         echo "  yum install -y gcc-c++"

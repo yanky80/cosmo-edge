@@ -46,7 +46,15 @@ echo "Dev mode: ${DEV_MODE}"
 echo "Resource dir: ${RESOURCE_DIR}"
 echo "Configuring..."
 cmake   -DCMAKE_BUILD_TYPE=Release \
+        -U CMAKE_C_COMPILER \
+        -U CMAKE_CXX_COMPILER \
+        -U COSMO_TARGET_ARCH \
+        -U COSMO_NN_USE_SOPHON_BACKEND \
+        -U COSMO_NN_USE_CPU_BACKEND \
+        -U COSMO_MEDIA_USE_SOPHON_BACKEND \
+        -U COSMO_MEDIA_USE_CPU_BACKEND \
         -DCMAKE_INSTALL_PREFIX=${INSTALL_DIR} \
+        -DCOSMO_TARGET_PLATFORM=sophon \
         -DBUILD_TESTS=${BUILD_TESTS_FLAG} \
         -DCOSMO_DEV_MODE=${DEV_MODE} \
         -DRESOURCE_DIR="${RESOURCE_DIR}" \

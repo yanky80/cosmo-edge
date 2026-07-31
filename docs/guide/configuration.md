@@ -72,6 +72,7 @@ ${INSTALLPATH}/scripts/run_start.sh start ${DATADIR}/log/logs/INTE_RUN_container
 | --- | --- |
 | x86 Docker | `data/resource/aiboxresource_x86` |
 | Sophon package | `data/resource/aiboxresource` |
+| RK3588 profile | `data/resource/aiboxresource_rk3588` |
 
 CMake 通过 `RESOURCE_DIR` 安装资源。
 
@@ -114,16 +115,25 @@ COSMO_STREAM_HTTP_PORT=18088
 
 | 选项 | 说明 |
 | --- | --- |
-| `COSMO_TARGET_ARCH` | `aarch64` 或 `x86_64` |
-| `COSMO_NN_USE_SOPHON_BACKEND` | 启用 Sophon 后端 |
-| `COSMO_NN_USE_CPU_BACKEND` | 启用 CPU/ONNX Runtime 后端（与 Sophon 互斥） |
+| `COSMO_TARGET_PLATFORM` | 静态构建 profile：`x86`、`sophon` 或 `rk3588` |
 | `COSMO_DEV_MODE` | 开发模式 |
 | `BUILD_TESTS` | 构建测试 |
+| `COSMO_RK3588_SDK_ROOT` | RK3588 SDK 根目录（`rk3588` profile 必填） |
+| `COSMO_RK3588_SYSROOT` | RK3588 sysroot 根目录（`rk3588` profile 必填） |
 
 以下为**派生变量**（由后端选择自动推导，非 `option()` 声明，不可直接 `-D` 设置，列出仅供了解）：
 
 | 派生变量 | 说明 |
 | --- | --- |
-| `COSMO_ENABLE_OPENH264` | CPU 后端时自动 `ON`，Sophon 后端时 `OFF` |
+| `COSMO_TARGET_ARCH` | `x86` 时为 `x86_64`；`sophon` / `rk3588` 时为 `aarch64` |
+| `COSMO_NN_USE_CPU_BACKEND` | `x86` profile 的 ONNX Runtime 后端 |
+| `COSMO_NN_USE_SOPHON_BACKEND` | `sophon` profile 的 BMRuntime 后端 |
+| `COSMO_NN_USE_RKNN_BACKEND` | `rk3588` profile 的 RKNN Runtime 后端 |
+| `COSMO_MEDIA_USE_CPU_BACKEND` | `x86` profile 的 FFmpeg 软件媒体后端 |
+| `COSMO_MEDIA_USE_SOPHON_BACKEND` | `sophon` profile 的 Sophon 媒体后端 |
+| `COSMO_MEDIA_USE_RK3588_BACKEND` | `rk3588` profile 的 RK3588 媒体后端 |
+| `COSMO_ENABLE_OPENH264` | `x86` profile 时自动 `ON` |
 | `COSMO_OPENH264_USE_ASM` | 始终为 `OFF` |
-| `COSMO_MODEL_GUARD` | Sophon 后端时 `ON`（启用加密模型校验），CPU 后端时 `OFF` |
+| `COSMO_MODEL_GUARD` | `sophon` profile 时自动 `ON`（启用加密模型校验） |
+
+旧的 `COSMO_TARGET_ARCH` 和 CPU/Sophon backend 开关仍可兼容输入。使用时 CMake 会输出弃用警告，并在与 `COSMO_TARGET_PLATFORM` 冲突时直接失败。

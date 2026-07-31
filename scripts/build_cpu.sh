@@ -41,6 +41,8 @@ clean_external_project() {
 }
 
 clean_external_project openssl_external
+clean_external_project srs_external
+rm -rf "${BUILD_DIR}/srs_source"
 
 
 
@@ -77,13 +79,18 @@ echo "Requires: pkg-config and openh264 development package (for x86 realtime OS
 echo "Configuring..."
 cmake   -DCMAKE_BUILD_TYPE=Release \
         -U CMAKE_TOOLCHAIN_FILE \
+        -U CMAKE_C_COMPILER \
+        -U CMAKE_CXX_COMPILER \
+        -U COSMO_TARGET_ARCH \
+        -U COSMO_NN_USE_SOPHON_BACKEND \
+        -U COSMO_NN_USE_CPU_BACKEND \
+        -U COSMO_MEDIA_USE_SOPHON_BACKEND \
+        -U COSMO_MEDIA_USE_CPU_BACKEND \
         -DCMAKE_INSTALL_PREFIX=${INSTALL_DIR} \
-        -DCOSMO_TARGET_ARCH=x86_64 \
-        -DCOSMO_NN_USE_SOPHON_BACKEND=OFF \
-        -DCOSMO_NN_USE_CPU_BACKEND=ON \
-        -DCOSMO_MEDIA_USE_SOPHON_BACKEND=OFF \
-        -DCOSMO_MEDIA_USE_CPU_BACKEND=ON \
+        -DCOSMO_TARGET_PLATFORM=x86 \
         -DBUILD_TESTS=OFF \
+        -DCMAKE_C_COMPILER=/usr/bin/cc \
+        -DCMAKE_CXX_COMPILER=/usr/bin/c++ \
         -DCOSMO_DEV_MODE=${DEV_MODE} \
         -DRESOURCE_DIR="${RESOURCE_DIR}" \
         ..

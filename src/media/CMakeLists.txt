@@ -47,8 +47,16 @@ set(MEDIA_CPU_SRC
     VideoFrameProcCpu.cc         VideoFrameProcCpu.h
 )
 
+set(MEDIA_RK3588_SRC
+    VideoDecoderCreateRk3588.cc
+    VideoEncoderCreateRk3588.cc
+    VideoFrameProcFactoryRk3588.cc
+)
+
 if(COSMO_MEDIA_USE_SOPHON_BACKEND)
     add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_SOPHON_SRC})
+elseif(COSMO_MEDIA_USE_RK3588_BACKEND)
+    add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_RK3588_SRC})
 elseif(COSMO_MEDIA_USE_CPU_BACKEND)
     add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_CPU_SRC})
 else()
