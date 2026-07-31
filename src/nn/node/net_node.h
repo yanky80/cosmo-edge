@@ -29,6 +29,8 @@ public:
 
     virtual Status LoadWeight(const char* data, size_t size) = 0;
 
+    virtual Status BindInputBlobs(std::vector<std::shared_ptr<Blob>>& bottom_blobs);
+
     void SetNetworkInputNames(std::vector<std::string> names);
 
     void SetNetworkOutputNames(std::vector<std::string> names);
@@ -36,6 +38,10 @@ public:
     void SetOutputToCpu(bool v) {
         output_to_cpu_ = v;
     }
+
+    virtual DeviceType GetInputBlobDeviceType();
+
+    virtual void UpdateTopBlobDesc(size_t index, BlobDesc& desc) const;
 
 protected:
     bool output_to_cpu_ = false;

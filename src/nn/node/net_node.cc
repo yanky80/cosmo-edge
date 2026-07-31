@@ -42,4 +42,14 @@ Status NetNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_blob,
     return COSMO_NN_OK;
 }
 
+Status NetNode::BindInputBlobs(std::vector<std::shared_ptr<Blob>>& /*bottom_blobs*/) {
+    return COSMO_NN_OK;
+}
+
+DeviceType NetNode::GetInputBlobDeviceType() {
+    return GetTopBlobDeviceType();
+}
+
+void NetNode::UpdateTopBlobDesc(size_t /*index*/, BlobDesc& /*desc*/) const {}
+
 }  // namespace cosmo::nn
