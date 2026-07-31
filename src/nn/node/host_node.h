@@ -11,6 +11,7 @@
 #include "nn/node/split_arg_max_node.h"
 #include "nn/node/split_node.h"
 #include "nn/node/sum_node.h"
+#include "nn/node/yolo26_raw_decode_node.h"
 #include "nn/node/yolo_decode_node.h"
 #include "nn/node/yolo_e2e_decode_node.h"
 #include "nn/node/yolov8_decode_node.h"

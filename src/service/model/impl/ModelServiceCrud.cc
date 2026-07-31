@@ -95,6 +95,10 @@ void ModelServiceImpl::ValidateModelOutputFormat(const nlohmann::json& doc) {
         }
         return count;
     };
+    const auto* params = firstModel.contains("params") && firstModel["params"].is_object() ? &firstModel["params"]
+                                                                                            : nullptr;
+    const std::string output_format =
+        params ? params->value("output_format", std::string("yolo_e2e")) : std::string("yolo_e2e");
     if (model_type == "yolov5_det") {
         if (outputs.size() == 1) {
             std::vector<int> shape = get_shape(outputs[0]);
@@ -124,6 +128,57 @@ void ModelServiceImpl::ValidateModelOutputFormat(const nlohmann::json& doc) {
                 cosmo::util::make_error_condition(cosmo::util::ErrorEnum::ParameterException),
                 "当前模型输出格式与 yolov8/yolov9/yolov11/yolov12 "
                 "检测模型不匹配，请确认选择的是检测模型而不是分类模型。添加不成功");
+        }
+    } else if (model_type == "yolo26_det" && output_format == "yolo26_raw") {
+        if (!params || !params->contains("input_size") || !(*params)["input_size"].is_array() ||
+            (*params)["input_size"].size() < 2) {
+            throw cosmo::util::ErrorMessage(
+                cosmo::util::make_error_condition(cosmo::util::ErrorEnum::ParameterException),
+                "YOLO26 raw-head 模型必须配置 input_size。添加不成功");
+        }
+        const int input_w = (*params)["input_size"][0].get<int>();
+        const int input_h = (*params)["input_size"][1].get<int>();
+        const int reg_max = params->value("reg_max", 1);
+        if (reg_max != 1) {
+            throw cosmo::util::ErrorMessage(
+                cosmo::util::make_error_condition(cosmo::util::ErrorEnum::ParameterException),
+                "YOLO26 raw-head 仅支持 reg_max=1。添加不成功");
+        }
+        if (outputs.size() != 6) {
+            throw cosmo::util::ErrorMessage(
+                cosmo::util::make_error_condition(cosmo::util::ErrorEnum::ParameterException),
+                "YOLO26 raw-head 模型必须声明 6 个 INT8 输出。添加不成功");
+        }
+
+        int class_count = -1;
+        for (std::size_t index = 0; index < outputs.size(); index += 2) {
+            const auto reg_shape = get_shape(outputs[index]);
+            const auto cls_shape = get_shape(outputs[index + 1]);
+            const bool reg_ok =
+                reg_shape.size() == 4 && reg_shape[1] == 4 && outputs[index].value("data_type", -1) == 5;
+            const bool cls_ok =
+                cls_shape.size() == 4 && cls_shape[1] > 0 && outputs[index + 1].value("data_type", -1) == 5;
+            const bool quant_ok = outputs[index].contains("scale") && outputs[index + 1].contains("scale") &&
+                                  outputs[index].contains("zero_point") &&
+                                  outputs[index + 1].contains("zero_point") &&
+                                  outputs[index].value("scale", 0.0f) > 0.0f &&
+                                  outputs[index + 1].value("scale", 0.0f) > 0.0f;
+            const bool spatial_ok = reg_ok && cls_ok && reg_shape[0] == cls_shape[0] &&
+                                    reg_shape[2] == cls_shape[2] && reg_shape[3] == cls_shape[3] &&
+                                    reg_shape[2] > 0 && reg_shape[3] > 0 && input_h % reg_shape[2] == 0 &&
+                                    input_w % reg_shape[3] == 0;
+            if (!reg_ok || !cls_ok || !quant_ok || !spatial_ok) {
+                throw cosmo::util::ErrorMessage(
+                    cosmo::util::make_error_condition(cosmo::util::ErrorEnum::ParameterException),
+                    "YOLO26 raw-head 输出数量、shape、类型或量化信息不匹配。添加不成功");
+            }
+            if (class_count == -1)
+                class_count = cls_shape[1];
+            else if (class_count != cls_shape[1]) {
+                throw cosmo::util::ErrorMessage(
+                    cosmo::util::make_error_condition(cosmo::util::ErrorEnum::ParameterException),
+                    "YOLO26 raw-head 三个尺度的类别数必须一致。添加不成功");
+            }
         }
     }
 }

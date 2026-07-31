@@ -48,6 +48,11 @@ namespace pipeline_utils {
     std::unique_ptr<YoloPost> MakeYoloE2EPostOp(float conf_threshold, int top_k, int input_width = 0,
                                                 int input_height = 0);
 
+    std::unique_ptr<Yolo26RawPost> MakeYolo26RawPostOp(float nms_threshold, float conf_threshold, int top_k,
+                                                       int reg_max, int input_width, int input_height,
+                                                       const std::vector<float>& output_scales,
+                                                       const std::vector<int>& output_zero_points);
+
     std::unique_ptr<DinoEncoder> MakeDinoEncoderOp(int dst_width, int dst_height, bool is_bgr,
                                                    const std::vector<float>& mean,
                                                    const std::vector<float>& std_dev);
