@@ -92,13 +92,15 @@ namespace Model {
     void to_json(nlohmann::json& j, const MsgListRecv& v);
     void from_json(const nlohmann::json& j, MsgListRecv& v);
 
-    struct BmodelFileInfo {
+    struct ModelArtifactInfo {
         std::string role;
         std::string filePath;
         std::string uploadId;
-        friend void to_json(nlohmann::json& j, const BmodelFileInfo& v);
-        friend void from_json(const nlohmann::json& j, BmodelFileInfo& v);
+        friend void to_json(nlohmann::json& j, const ModelArtifactInfo& v);
+        friend void from_json(const nlohmann::json& j, ModelArtifactInfo& v);
     };
+
+    using BmodelFileInfo = ModelArtifactInfo;
 
     // Add atomic model (AIBox platform)
     struct MsgAddRecv : public MsgRecvHead {
@@ -106,7 +108,8 @@ namespace Model {
         std::string modelName;
         std::string modelType;
         std::string description;
-        std::vector<BmodelFileInfo> bmodelFiles;
+        std::vector<ModelArtifactInfo> modelFiles;
+        bool modelFilesConflict{false};
         std::string vocabFilePath;
         std::string vocabUploadId;
         std::string tokenizerFilePath;

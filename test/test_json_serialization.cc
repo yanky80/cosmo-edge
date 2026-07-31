@@ -9,6 +9,7 @@
 #include "nlohmann/json.hpp"
 #include "platform/NetCardOp.h"
 #include "service/face/dto/BodyLibDto.h"
+#include "service/model/dto/ModelDto.h"
 #include "service/face/dto/ThingsLibDto.h"
 #include "service/system/dto/SystemDeviceDto.h"
 #include "util/JsonStructUtil.h"
@@ -257,6 +258,57 @@ TEST_CASE("Staged image identifiers round-trip without serializing trusted bytes
         REQUIRE(cosmo::util::DecodeJson(json, restored));
         CHECK(restored.uploadId == original.uploadId);
         CHECK(restored.imageData.empty());
+    }
+}
+
+TEST_CASE("Atomic model upload JSON uses modelFiles as the canonical artifact field",
+          "[json][model][upload-staging]") {
+    SECTION("serialization emits modelFiles only") {
+        cosmo::Model::MsgAddRecv original;
+        original.modelCode = "code";
+        original.modelName = "name";
+        original.modelType = "type";
+        original.modelFiles.push_back({"main", "", "upload-1"});
+
+        const nlohmann::json doc = original;
+        CHECK(doc.contains("modelFiles"));
+        CHECK_FALSE(doc.contains("bmodelFiles"));
+        REQUIRE(doc["modelFiles"].is_array());
+        REQUIRE(doc["modelFiles"].size() == 1);
+        CHECK(doc["modelFiles"][0]["role"] == "main");
+        CHECK(doc["modelFiles"][0]["uploadId"] == "upload-1");
+    }
+
+    SECTION("deserialization accepts modelFiles and legacy bmodelFiles") {
+        const auto canonical =
+            nlohmann::json{{"modelFiles", {{{"role", "main"}, {"uploadId", "upload-1"}}}}}
+                .get<cosmo::Model::MsgAddRecv>();
+        REQUIRE(canonical.modelFiles.size() == 1);
+        CHECK(canonical.modelFiles.front().uploadId == "upload-1");
+        CHECK_FALSE(canonical.modelFilesConflict);
+
+        const auto legacy =
+            nlohmann::json{{"bmodelFiles", {{{"role", "main"}, {"uploadId", "upload-2"}}}}}
+                .get<cosmo::Model::MsgAddRecv>();
+        REQUIRE(legacy.modelFiles.size() == 1);
+        CHECK(legacy.modelFiles.front().uploadId == "upload-2");
+        CHECK_FALSE(legacy.modelFilesConflict);
+    }
+
+    SECTION("deserialization marks conflicting aliases and rejects malformed modelFiles") {
+        const auto conflicting = nlohmann::json{
+            {"modelFiles", {{{"role", "main"}, {"uploadId", "upload-1"}}}},
+            {"bmodelFiles", {{{"role", "main"}, {"uploadId", "upload-2"}}}},
+        }.get<cosmo::Model::MsgAddRecv>();
+        CHECK(conflicting.modelFilesConflict);
+        REQUIRE(conflicting.modelFiles.size() == 1);
+        CHECK(conflicting.modelFiles.front().uploadId == "upload-1");
+
+        using JsonTypeError = nlohmann::json::type_error;
+        const auto decode_malformed = []() {
+            return nlohmann::json{{"modelFiles", "not-an-array"}}.get<cosmo::Model::MsgAddRecv>();
+        };
+        CHECK_THROWS_AS(decode_malformed(), JsonTypeError);
     }
 }
 

@@ -197,7 +197,7 @@ Model::MsgAddSend MessageModelHandler::Handle(Model::MsgAddRecv&& data, std::err
     Model::MsgAddSend retData{};
     errc =
         model_service_.AddAtomicModel(data.modelCode, data.modelName, data.modelType, data.description,
-                                      data.bmodelFiles, data.vocabFilePath, data.tokenizerFilePath,
+                                      data.modelFiles, data.vocabFilePath, data.tokenizerFilePath,
                                       data.characterTableFilePath, data.normalizationMode, data.colorChannel);
     return retData;
 }
@@ -210,7 +210,7 @@ Model::MsgAddSend MessageModelHandler::Handle(Model::MsgAddRecv&& data, const Re
         return result;
     }
 
-    if (data.bmodelFiles.empty()) {
+    if (data.modelFilesConflict || data.modelFiles.empty()) {
         errc = util::ErrorEnum::InvalidParam;
         return result;
     }
@@ -219,8 +219,8 @@ Model::MsgAddSend MessageModelHandler::Handle(Model::MsgAddRecv&& data, const Re
     ReferenceKind reference_kind = ReferenceKind::kUnset;
     std::vector<std::string> references;
     std::vector<std::string*> claimed_paths;
-    references.reserve(data.bmodelFiles.size() + 3);
-    claimed_paths.reserve(data.bmodelFiles.size() + 3);
+    references.reserve(data.modelFiles.size() + 3);
+    claimed_paths.reserve(data.modelFiles.size() + 3);
 
     auto add_reference = [&](const std::string& upload_id, std::string& file_path, bool required) {
         if (!upload_id.empty() && !file_path.empty()) {
@@ -239,7 +239,7 @@ Model::MsgAddSend MessageModelHandler::Handle(Model::MsgAddRecv&& data, const Re
         return true;
     };
 
-    for (auto& file : data.bmodelFiles) {
+    for (auto& file : data.modelFiles) {
         if (!add_reference(file.uploadId, file.filePath, true)) {
             errc = util::ErrorEnum::InvalidParam;
             return result;

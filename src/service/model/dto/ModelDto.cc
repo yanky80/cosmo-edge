@@ -73,7 +73,7 @@ void to_json(nlohmann::json& j, const MsgAddRecv& v) {
     j["modelName"]              = v.modelName;
     j["modelType"]              = v.modelType;
     j["description"]            = v.description;
-    j["bmodelFiles"]            = v.bmodelFiles;
+    j["modelFiles"]             = v.modelFiles;
     j["vocabFilePath"]          = v.vocabFilePath;
     j["vocabUploadId"]          = v.vocabUploadId;
     j["tokenizerFilePath"]      = v.tokenizerFilePath;
@@ -90,7 +90,16 @@ void from_json(const nlohmann::json& j, MsgAddRecv& v) {
     JSON_OPT(j, v, modelName);
     JSON_OPT(j, v, modelType);
     JSON_OPT(j, v, description);
-    JSON_OPT(j, v, bmodelFiles);
+    const bool has_model_files  = j.contains("modelFiles");
+    const bool has_bmodel_files = j.contains("bmodelFiles");
+    v.modelFilesConflict        = has_model_files && has_bmodel_files;
+    if (has_model_files) {
+        j.at("modelFiles").get_to(v.modelFiles);
+    } else if (has_bmodel_files) {
+        j.at("bmodelFiles").get_to(v.modelFiles);
+    } else {
+        v.modelFiles.clear();
+    }
     JSON_OPT(j, v, vocabFilePath);
     JSON_OPT(j, v, vocabUploadId);
     JSON_OPT(j, v, tokenizerFilePath);
@@ -385,13 +394,13 @@ void to_json(nlohmann::json& j, const MsgPageSend::ResData& v) {
     j["rows"]  = v.rows;
 }
 
-void from_json(const nlohmann::json& j, BmodelFileInfo& v) {
+void from_json(const nlohmann::json& j, ModelArtifactInfo& v) {
     JSON_OPT(j, v, role);
     JSON_OPT(j, v, filePath);
     JSON_OPT(j, v, uploadId);
 }
 
-void to_json(nlohmann::json& j, const BmodelFileInfo& v) {
+void to_json(nlohmann::json& j, const ModelArtifactInfo& v) {
     j["role"]     = v.role;
     j["filePath"] = v.filePath;
     j["uploadId"] = v.uploadId;
