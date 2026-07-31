@@ -19,16 +19,8 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build" FORCE)
 endif()
 
-set(COSMO_TARGET_ARCH "aarch64" CACHE STRING "Target architecture: aarch64 or x86_64")
+include(cmake/target_platform.cmake)
 set_property(CACHE COSMO_TARGET_ARCH PROPERTY STRINGS aarch64 x86_64)
-if(NOT COSMO_TARGET_ARCH STREQUAL "aarch64" AND NOT COSMO_TARGET_ARCH STREQUAL "x86_64")
-    message(FATAL_ERROR "Unsupported COSMO_TARGET_ARCH=${COSMO_TARGET_ARCH}. Expected aarch64 or x86_64.")
-endif()
-
-if(COSMO_TARGET_ARCH STREQUAL "aarch64" AND NOT CMAKE_TOOLCHAIN_FILE)
-    set(CMAKE_TOOLCHAIN_FILE "${CMAKE_SOURCE_DIR}/toolchains/aarch64-linux.toolchain.cmake"
-        CACHE FILEPATH "aarch64 linux cross toolchain")
-endif()
 
 project(Cosmo LANGUAGES C CXX)
 
@@ -81,50 +73,51 @@ if(COSMO_DEV_MODE)
     add_compile_definitions(COSMO_DEV_MODE)
 endif()
 
-#-- Backend selection(mutually exclusive) --
-option(COSMO_NN_USE_SOPHON_BACKEND "Enable Sophon TPU backend" ON)
-option(COSMO_NN_USE_CPU_BACKEND "Enable CPU inference backend (ONNX Runtime)" OFF)
-
-if(COSMO_NN_USE_SOPHON_BACKEND AND COSMO_NN_USE_CPU_BACKEND)
-    message(FATAL_ERROR "COSMO_NN_USE_SOPHON_BACKEND and COSMO_NN_USE_CPU_BACKEND are mutually exclusive")
-endif()
-if(NOT COSMO_NN_USE_SOPHON_BACKEND AND NOT COSMO_NN_USE_CPU_BACKEND)
-    message(FATAL_ERROR "At least one NN backend must be enabled")
-endif()
-
-# Media acceleration is selected independently from inference. Defaults keep
-# existing builds unchanged while allowing a software media pipeline to be
-# paired with another inference backend.
-set(_cosmo_media_sophon_default OFF)
-set(_cosmo_media_cpu_default OFF)
-if(COSMO_NN_USE_SOPHON_BACKEND)
-    set(_cosmo_media_sophon_default ON)
+if(COSMO_TARGET_PLATFORM STREQUAL "x86")
+    add_compile_definitions(COSMO_TARGET_PLATFORM_X86)
+elseif(COSMO_TARGET_PLATFORM STREQUAL "sophon")
+    add_compile_definitions(COSMO_TARGET_PLATFORM_SOPHON)
 else()
-    set(_cosmo_media_cpu_default ON)
+    add_compile_definitions(COSMO_TARGET_PLATFORM_RK3588)
 endif()
 
-option(COSMO_MEDIA_USE_SOPHON_BACKEND "Enable Sophon hardware media backend"
-       ${_cosmo_media_sophon_default})
-option(COSMO_MEDIA_USE_CPU_BACKEND "Enable FFmpeg software media backend"
-       ${_cosmo_media_cpu_default})
+#-- Backend selection(mutually exclusive) --
+set(_cosmo_nn_backend_count 0)
+foreach(_nn_backend_option
+        COSMO_NN_USE_SOPHON_BACKEND
+        COSMO_NN_USE_CPU_BACKEND
+        COSMO_NN_USE_RKNN_BACKEND)
+    if(${_nn_backend_option})
+        math(EXPR _cosmo_nn_backend_count "${_cosmo_nn_backend_count} + 1")
+    endif()
+endforeach()
+if(NOT _cosmo_nn_backend_count EQUAL 1)
+    message(FATAL_ERROR "Exactly one NN backend must be enabled: Sophon, CPU, or RKNN")
+endif()
 
 set(_cosmo_media_backend_count 0)
 foreach(_media_backend_option
         COSMO_MEDIA_USE_SOPHON_BACKEND
-        COSMO_MEDIA_USE_CPU_BACKEND)
+        COSMO_MEDIA_USE_CPU_BACKEND
+        COSMO_MEDIA_USE_RK3588_BACKEND)
     if(${_media_backend_option})
         math(EXPR _cosmo_media_backend_count "${_cosmo_media_backend_count} + 1")
     endif()
 endforeach()
 if(NOT _cosmo_media_backend_count EQUAL 1)
-    message(FATAL_ERROR "Exactly one media backend must be enabled: Sophon or CPU")
+    message(FATAL_ERROR "Exactly one media backend must be enabled: Sophon, CPU, or RK3588")
 endif()
 if(COSMO_MEDIA_USE_SOPHON_BACKEND AND NOT COSMO_NN_USE_SOPHON_BACKEND)
     message(FATAL_ERROR "Sophon media requires the Sophon device runtime")
 endif()
+if(COSMO_MEDIA_USE_RK3588_BACKEND AND NOT COSMO_NN_USE_RKNN_BACKEND)
+    message(FATAL_ERROR "RK3588 media requires the RKNN device runtime")
+endif()
 
 if(COSMO_MEDIA_USE_SOPHON_BACKEND)
     add_compile_definitions(COSMO_MEDIA_USE_SOPHON_BACKEND)
+elseif(COSMO_MEDIA_USE_RK3588_BACKEND)
+    add_compile_definitions(COSMO_MEDIA_USE_RK3588_BACKEND)
 else()
     add_compile_definitions(COSMO_MEDIA_USE_CPU_BACKEND)
 endif()
@@ -162,7 +155,10 @@ message(STATUS "\tSystem:    ${CMAKE_SYSTEM_NAME}")
 message(STATUS "\tProcessor: ${CMAKE_SYSTEM_PROCESSOR}")
 message(STATUS "\tCompiler:  ${CMAKE_CXX_COMPILER}, Version: ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "\tToolchain: ${CMAKE_TOOLCHAIN_FILE}")
+message(STATUS "\tPlatform:  ${COSMO_TARGET_PLATFORM}")
 message(STATUS "\tTarget:    ${COSMO_TARGET_ARCH}")
+message(STATUS "\tResource:  ${RESOURCE_DIR}")
+message(STATUS "\tModel ext: ${COSMO_MODEL_FILE_EXTENSIONS}")
 
 ##########################################################
 #Third - party Dependencies
@@ -193,6 +189,9 @@ include(cmake/openssl.cmake)
 include(cmake/curl.cmake)
 include(cmake/mqtt.cmake)
 include(cmake/event.cmake)
+if(COSMO_TARGET_PLATFORM STREQUAL "rk3588")
+    include(cmake/rk3588_sdk.cmake)
+endif()
 include(cmake/ffmpeg.cmake)
 include(cmake/cryptopp.cmake)
 include(cmake/uWebSockets.cmake)

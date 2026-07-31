@@ -23,10 +23,18 @@ elseif(COSMO_TARGET_ARCH STREQUAL "x86_64")
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${SRS_ORIGINAL_SOURCE_DIR} <SOURCE_DIR>
     )
     set(SRS_PATCH_COMMAND ${CMAKE_COMMAND} -E true)
+    find_program(SRS_HOST_CC gcc)
+    find_program(SRS_HOST_CXX g++)
+    if(NOT SRS_HOST_CC)
+        set(SRS_HOST_CC ${CMAKE_C_COMPILER})
+    endif()
+    if(NOT SRS_HOST_CXX)
+        set(SRS_HOST_CXX ${CMAKE_CXX_COMPILER})
+    endif()
     set(SRS_CONFIGURE_ARCH_ARGS
         --cross=off
-        --cc=${CMAKE_C_COMPILER}
-        --cxx=${CMAKE_CXX_COMPILER}
+        --cc=${SRS_HOST_CC}
+        --cxx=${SRS_HOST_CXX}
         --arch=x86_64
     )
 endif()

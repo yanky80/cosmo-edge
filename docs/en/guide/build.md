@@ -1,6 +1,6 @@
 ---
 title: Build Guide
-description: Confirmed build paths for x86 Docker, Sophon release packages, CPU test builds, and docs.
+description: Confirmed build paths for target-platform profiles, x86 Docker, Sophon release packages, RK3588 SDK validation, CPU test builds, and docs.
 prev:
   text: Documentation Home
   link: /en/
@@ -20,10 +20,30 @@ This page documents build paths that are confirmed and available in the reposito
 
 | Target | Entry Point | Notes |
 | --- | --- | --- |
+| Target-platform profile validation | `bash scripts/test_target_platform_profiles.sh` | Verifies `x86`, `sophon`, `rk3588`, legacy compatibility, and invalid combinations at CMake configure time. |
 | x86 Docker runtime | `docker-compose.x86.yml` / `docker-compose.x86.windows.yml` | Starts the containerized development/runtime environment. |
 | Sophon release package | `docker compose -f docker-compose.sophon.yml run --rm cosmo-sophon-package` | Creates the target-device release package. |
+| RK3588 profile configure | `cmake -S . -B build_rk3588 -DCOSMO_TARGET_PLATFORM=rk3588 ...` | Validates an external RK SDK/sysroot without committing vendor binaries. |
 | CPU test build | `scripts/build_cpu_test.sh` | Builds `cosmo-tests` for x86 CPU validation. |
 | Documentation site | `npm ci` and `npm run docs:build` | Builds this VitePress site. |
+
+## Target-Platform Profile
+
+CosmoEdge now selects one static build profile with:
+
+```bash
+-DCOSMO_TARGET_PLATFORM=x86|sophon|rk3588
+```
+
+The profile derives:
+
+- target architecture and toolchain
+- inference and media backend selection
+- compile definitions and linked vendor/runtime dependencies
+- model artifact metadata (`.onnx`, `.nn` / `.bmodel`, `.rknn`)
+- default `RESOURCE_DIR` and package contents
+
+Legacy inputs such as `COSMO_TARGET_ARCH` and the old CPU/Sophon backend toggles are still accepted for compatibility, but CMake warns and rejects conflicts.
 
 ## x86 Docker Development Runtime
 
@@ -38,9 +58,7 @@ Confirmed CMake parameters:
 
 | Parameter | Value |
 | --- | --- |
-| `COSMO_TARGET_ARCH` | `x86_64` |
-| `COSMO_NN_USE_SOPHON_BACKEND` | `OFF` |
-| `COSMO_NN_USE_CPU_BACKEND` | `ON` |
+| `COSMO_TARGET_PLATFORM` | `x86` |
 | `COSMO_ENABLE_OPENH264` | `ON` |
 | `COSMO_DEV_MODE` | `ON` |
 | `RESOURCE_DIR` | `data/resource/aiboxresource_x86` |
@@ -90,6 +108,31 @@ Confirmed behavior:
 - Builds with `scripts/build.sh -m data/resource/aiboxresource`.
 - Exports the release package only (does not start services).
 - Package output under `build_output/`.
+
+Confirmed profile:
+
+| Parameter | Value |
+| --- | --- |
+| `COSMO_TARGET_PLATFORM` | `sophon` |
+
+## RK3588 Profile Configure
+
+The RK3588 profile validates build inputs from an external SDK/sysroot and does not use vendored RK binaries from this repository.
+
+```bash
+cmake -S . -B build_rk3588 \
+  -DCOSMO_TARGET_PLATFORM=rk3588 \
+  -DCOSMO_RK3588_SDK_ROOT=/path/to/rk-sdk \
+  -DCOSMO_RK3588_SYSROOT=/path/to/rk-sysroot
+```
+
+Configure-time checks cover:
+
+- `rknn_api.h`, `RgaApi.h`, and `libdrm/drm.h`
+- aarch64 shared libraries such as `librknnrt.so`, `librga.so`, `libdrm.so`, and FFmpeg libs
+- required `pkg-config` modules for `libdrm`, `rockchip_mpp`, and FFmpeg
+
+The zero-copy runtime path is still implemented in follow-up RK3588 issues; this issue only introduces the profile and SDK/sysroot validation seam.
 
 ## CPU Test Build
 

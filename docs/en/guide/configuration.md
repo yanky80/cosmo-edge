@@ -72,6 +72,7 @@ When both variables are absent, signed manager requests remain disabled. A parti
 | --- | --- |
 | x86 Docker | `data/resource/aiboxresource_x86` |
 | Sophon package | `data/resource/aiboxresource` |
+| RK3588 profile | `data/resource/aiboxresource_rk3588` |
 
 CMake installs resources via `RESOURCE_DIR`.
 
@@ -114,16 +115,25 @@ User-configurable cache options (set with `-D<option>=<value>`):
 
 | Option | Description |
 | --- | --- |
-| `COSMO_TARGET_ARCH` | `aarch64` or `x86_64` |
-| `COSMO_NN_USE_SOPHON_BACKEND` | Enable the Sophon backend (mutually exclusive with `COSMO_NN_USE_CPU_BACKEND`) |
-| `COSMO_NN_USE_CPU_BACKEND` | Enable the CPU/ONNX Runtime backend (mutually exclusive with `COSMO_NN_USE_SOPHON_BACKEND`) |
+| `COSMO_TARGET_PLATFORM` | Static build profile: `x86`, `sophon`, or `rk3588` |
 | `COSMO_DEV_MODE` | Development mode |
 | `BUILD_TESTS` | Build the test suite |
+| `COSMO_RK3588_SDK_ROOT` | RK3588 SDK root (required for the `rk3588` profile) |
+| `COSMO_RK3588_SYSROOT` | RK3588 sysroot root (required for the `rk3588` profile) |
 
 Derived variables (set automatically by the build system, not to be set directly):
 
 | Variable | Description |
 | --- | --- |
-| `COSMO_ENABLE_OPENH264` | Enable OpenH264 under the CPU backend |
-| `COSMO_OPENH264_USE_ASM` | Enable ASM for OpenH264 under the CPU backend |
-| `COSMO_MODEL_GUARD` | Model guard integration |
+| `COSMO_TARGET_ARCH` | `x86_64` for `x86`; `aarch64` for `sophon` and `rk3588` |
+| `COSMO_NN_USE_CPU_BACKEND` | ONNX Runtime backend under `x86` |
+| `COSMO_NN_USE_SOPHON_BACKEND` | BMRuntime backend under `sophon` |
+| `COSMO_NN_USE_RKNN_BACKEND` | RKNN Runtime backend under `rk3588` |
+| `COSMO_MEDIA_USE_CPU_BACKEND` | FFmpeg software media backend under `x86` |
+| `COSMO_MEDIA_USE_SOPHON_BACKEND` | Sophon media backend under `sophon` |
+| `COSMO_MEDIA_USE_RK3588_BACKEND` | RK3588 media backend under `rk3588` |
+| `COSMO_ENABLE_OPENH264` | Enabled automatically under the `x86` profile |
+| `COSMO_OPENH264_USE_ASM` | Always `OFF` |
+| `COSMO_MODEL_GUARD` | Enabled automatically under the `sophon` profile |
+
+Legacy `COSMO_TARGET_ARCH` and the old CPU/Sophon backend toggles are still accepted for compatibility. CMake warns when they are used and rejects any conflict with `COSMO_TARGET_PLATFORM`.

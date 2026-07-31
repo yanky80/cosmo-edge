@@ -1,6 +1,6 @@
 ---
 title: 构建指南
-description: x86 Docker、Sophon 发布包和 CPU 测试构建路径。
+description: 目标平台 profile、x86 Docker、Sophon 发布包、RK3588 SDK 校验和 CPU 测试构建路径。
 prev:
   text: 文档首页
   link: /
@@ -20,9 +20,29 @@ next:
 
 | 路径 | 用途 | 是否启动服务 | 输出 |
 | --- | --- | --- | --- |
+| `scripts/test_target_platform_profiles.sh` | 验证 `x86` / `sophon` / `rk3588` profile、旧参数兼容和非法组合 | 否 | 临时 CMake 配置目录 |
 | x86 Docker 开发运行环境 | 首次体验、开发评估、生成 x86 发布包 | 是 | `build_output/` |
 | Sophon 发布包构建 | 生成 aarch64/Sophon 部署包 | 否 | `build_output/` |
+| RK3588 profile 配置 | 校验外部 RK SDK/sysroot | 否 | `build_rk3588/` |
 | CPU 测试构建 | 构建 `cosmo-tests` | 否 | `build_cpu/cosmo-tests` |
+
+## 目标平台 Profile
+
+CosmoEdge 现在通过单一参数选择静态构建 profile：
+
+```bash
+-DCOSMO_TARGET_PLATFORM=x86|sophon|rk3588
+```
+
+该 profile 统一派生：
+
+- 目标架构和 toolchain
+- 推理/媒体后端
+- 编译宏和链接依赖
+- 模型制品元数据（`.onnx`、`.nn` / `.bmodel`、`.rknn`）
+- 默认 `RESOURCE_DIR` 和打包内容
+
+旧的 `COSMO_TARGET_ARCH` 和 CPU/Sophon backend 开关仍可兼容输入，但 CMake 会给出弃用警告，并在冲突时直接失败。
 
 ## x86 Docker 开发运行环境
 
@@ -49,9 +69,7 @@ docker compose -f docker-compose.x86.windows.yml up -d --build
 
 | 参数 | 值 |
 | --- | --- |
-| `COSMO_TARGET_ARCH` | `x86_64` |
-| `COSMO_NN_USE_SOPHON_BACKEND` | `OFF` |
-| `COSMO_NN_USE_CPU_BACKEND` | `ON` |
+| `COSMO_TARGET_PLATFORM` | `x86` |
 | `COSMO_ENABLE_OPENH264` | `ON` |
 | `COSMO_DEV_MODE` | `ON` |
 | `RESOURCE_DIR` | `data/resource/aiboxresource_x86` |
@@ -89,6 +107,31 @@ Windows PowerShell：
 - 使用 `scripts/build.sh -m data/resource/aiboxresource` 构建（生产包不启用 dev mode，故不传 `-t`）。
 - 只导出发布包，不启动服务。
 - 发布包导出到 `build_output/`。
+
+已确认 profile：
+
+| 参数 | 值 |
+| --- | --- |
+| `COSMO_TARGET_PLATFORM` | `sophon` |
+
+## RK3588 Profile 配置
+
+RK3588 profile 只校验外部 SDK/sysroot，不向仓库提交 RK 厂商二进制：
+
+```bash
+cmake -S . -B build_rk3588 \
+  -DCOSMO_TARGET_PLATFORM=rk3588 \
+  -DCOSMO_RK3588_SDK_ROOT=/path/to/rk-sdk \
+  -DCOSMO_RK3588_SYSROOT=/path/to/rk-sysroot
+```
+
+配置阶段会检查：
+
+- `rknn_api.h`、`RgaApi.h`、`libdrm/drm.h`
+- `librknnrt.so`、`librga.so`、`libdrm.so` 和 FFmpeg 共享库
+- `libdrm`、`rockchip_mpp`、FFmpeg 的 `pkg-config` 模块
+
+MPP DRM PRIME 到 RKNN 输入 tensor 的零拷贝运行时链路仍在后续 RK3588 issue 中实现；本 issue 只建立 profile 和 SDK/sysroot 校验面。
 
 ## CPU 测试构建
 
