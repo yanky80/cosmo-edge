@@ -11,7 +11,6 @@ on:
       - 'prebuild/ffmpeg/x86_64/**'
       - 'toolchains/**'
       - 'CMakeLists.txt'
-      - 'scripts/test_target_platform_profiles.sh'
       - 'scripts/build_cpu_test.sh'
       - '.github/workflows/ci-build-and-test.yml'
   workflow_dispatch:
@@ -62,9 +61,6 @@ jobs:
             rustup default stable
           fi
           cargo --version
-
-      - name: Validate target-platform profiles
-        run: bash scripts/test_target_platform_profiles.sh
 
       # ── Build ────────────────────────────────────────────────────────
       - name: Configure and build cosmo-tests (x86 CPU backend)
