@@ -251,6 +251,77 @@ TEST_CASE("ModelServiceImpl: 模型服务核心逻辑", "[model-service]") {
             REQUIRE(sut.GetModelPathMapping("invalid_code") == "");
         }
 
+        SECTION("models[].file_name pins managed-path resolution before legacy extension fallback") {
+            const auto modelDir =
+                std::filesystem::path(testModelsDir) /
+                (std::string(cosmo::util::kPlatformDirPrefix) + "test_model_001_TestModel_V1.0.0");
+            const auto listedModel = modelDir / ("preferred" + std::string(cosmo::util::kModelFileExt));
+            const auto legacyModel = modelDir / ("model" + std::string(cosmo::util::kModelFileExt));
+            std::ofstream(listedModel) << "preferred";
+            std::ofstream(legacyModel) << "legacy";
+            {
+                std::ofstream config(modelDir / "config.json");
+                config << "{\"algorithm_code\":\"test_model_001\",\"chip_type\":\"" << cosmo::util::kEngineType
+                       << "\",\"model_type\":\"yolov8_det\",\"models\":[{\"name\":\"TestModel\",\"file_name\":\""
+                       << listedModel.filename().string() << "\"}]}";
+            }
+            sut.SetModelPathMapping("test_model_001", modelDir.string());
+
+            std::string configPath;
+            std::string resolvedModelPath;
+            REQUIRE(sut.GetModelCfg("test_model_001", configPath, resolvedModelPath));
+            REQUIRE(configPath == (modelDir / "config.json").string());
+            REQUIRE(resolvedModelPath == listedModel.string());
+        }
+
+        SECTION("empty models[].file_name keeps legacy extension-scan fallback") {
+            const auto modelDir =
+                std::filesystem::path(testModelsDir) /
+                (std::string(cosmo::util::kPlatformDirPrefix) + "test_model_001_TestModel_V1.0.0");
+            const auto legacyModel = modelDir / ("fallback" + std::string(cosmo::util::kModelFileExt));
+            std::ofstream(legacyModel) << "legacy";
+            {
+                std::ofstream config(modelDir / "config.json");
+                config << "{\"algorithm_code\":\"test_model_001\",\"chip_type\":\"" << cosmo::util::kEngineType
+                       << "\",\"model_type\":\"yolov8_det\",\"models\":[{\"name\":\"TestModel\",\"file_name\":\"\"}]}";
+            }
+            sut.SetModelPathMapping("test_model_001", modelDir.string());
+
+            std::string configPath;
+            std::string resolvedModelPath;
+            REQUIRE(sut.GetModelCfg("test_model_001", configPath, resolvedModelPath));
+            REQUIRE(resolvedModelPath == legacyModel.string());
+        }
+
+        SECTION("invalid models[].file_name mappings fail managed-path resolution") {
+            const auto modelDir =
+                std::filesystem::path(testModelsDir) /
+                (std::string(cosmo::util::kPlatformDirPrefix) + "test_model_001_TestModel_V1.0.0");
+            const auto listedModel = modelDir / ("listed" + std::string(cosmo::util::kModelFileExt));
+            std::ofstream(listedModel) << "listed";
+            sut.SetModelPathMapping("test_model_001", modelDir.string());
+
+            std::string configPath;
+            std::string resolvedModelPath;
+
+            {
+                std::ofstream config(modelDir / "config.json");
+                config << "{\"algorithm_code\":\"test_model_001\",\"chip_type\":\"" << cosmo::util::kEngineType
+                       << "\",\"model_type\":\"yolov8_det\",\"models\":[{\"name\":\"TestModel\",\"file_name\":\".."
+                       << listedModel.filename().string() << "\"}]}";
+            }
+            REQUIRE_FALSE(sut.GetModelCfg("test_model_001", configPath, resolvedModelPath));
+
+            {
+                std::ofstream config(modelDir / "config.json");
+                config << "{\"algorithm_code\":\"test_model_001\",\"chip_type\":\"" << cosmo::util::kEngineType
+                       << "\",\"model_type\":\"yolov8_det\",\"models\":[{\"name\":\"Net0\",\"file_name\":\""
+                       << listedModel.filename().string() << "\"},{\"name\":\"Net1\",\"file_name\":\""
+                       << listedModel.filename().string() << "\"}]}";
+            }
+            REQUIRE_FALSE(sut.GetModelCfg("test_model_001", configPath, resolvedModelPath));
+        }
+
         SECTION("OCR 模型包路径必须使用配置绑定的字符表") {
             const auto modelDir =
                 std::filesystem::path(testModelsDir) /

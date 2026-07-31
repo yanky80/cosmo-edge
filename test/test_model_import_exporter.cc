@@ -1,6 +1,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <vector>
 
 #include "util/NnBackendConstants.h"
 #include "util/PathUtil.h"
@@ -344,15 +345,19 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
         // Let's create a real tar.gz using system.
         std::string tempArchiveDir = "/tmp/cosmo_test_archive_dir";
         fs::create_directories(tempArchiveDir + "/fake_model");
-        std::ofstream outCfg(tempArchiveDir + "/fake_model/config.json");
-        outCfg << "{\"modelCode\": \"fake_model\", \"algorithmVersion\": \"1.0.0\"}";
-        outCfg.close();
-
         std::string modelFile = "model" + std::string(cosmo::util::kModelFileExt);
         std::ofstream outNn(tempArchiveDir + "/fake_model/" + modelFile);
         outNn << "fake";
         outNn.close();
-
+        std::ofstream outLegacy(tempArchiveDir + "/fake_model/ignored.legacy");
+        outLegacy << "legacy";
+        outLegacy.close();
+        {
+            std::ofstream outCfg(tempArchiveDir + "/fake_model/config.json", std::ios::trunc);
+            outCfg << "{\"algorithm_code\": \"1234567\", \"chip_type\": \"" << cosmo::util::kEngineType
+                   << "\", \"version\": \"V1.0.0\", \"models\": [{\"name\": \"fake_model\", \"file_name\": \""
+                   << modelFile << "\"}]}";
+        }
         std::string tarFile = testUploadDir + "/test_import.tar.gz";
         std::string cmd     = "cd " + tempArchiveDir + " && tar -czf " + tarFile + " fake_model";
         (void)!system(cmd.c_str());
@@ -370,15 +375,16 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
         // Create a flat tar.gz where config.json is at the root of the archive
         std::string tempArchiveDir = "/tmp/cosmo_test_flat_archive_dir";
         fs::create_directories(tempArchiveDir);
-        std::ofstream outCfg(tempArchiveDir + "/config.json");
-        outCfg << "{\"modelCode\": \"flat_model\", \"algorithmVersion\": \"1.0.0\"}";
-        outCfg.close();
-
         std::string modelFile = "model" + std::string(cosmo::util::kModelFileExt);
         std::ofstream outNn(tempArchiveDir + "/" + modelFile);
         outNn << "fake";
         outNn.close();
-
+        {
+            std::ofstream outCfg(tempArchiveDir + "/config.json", std::ios::trunc);
+            outCfg << "{\"algorithm_code\": \"7654321\", \"chip_type\": \"" << cosmo::util::kEngineType
+                   << "\", \"version\": \"V1.0.0\", \"models\": [{\"name\": \"FlatModel\", \"file_name\": \""
+                   << modelFile << "\"}]}";
+        }
         std::string tarFile = testUploadDir + "/flat_import.tar.gz";
         std::string cmd = "cd " + tempArchiveDir + " && tar -czf " + tarFile + " config.json " + modelFile;
         (void)!system(cmd.c_str());
@@ -386,16 +392,83 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
         auto res = importExporter.ImportModel(tarFile);
         REQUIRE(res == cosmo::util::ErrorEnum::Success);
 
-        // ImportFlatArchive uses kNewDirPrefix + alg_code + "_" + name + "_" + version
-        // alg_code defaults to "0000000" (no "algorithm_code" key in config.json),
-        // name defaults to "imported", version defaults to "V1.0.0"
         REQUIRE(fs::exists(testModelDir + "/" + std::string(cosmo::util::kNewDirPrefix) +
-                           "0000000_imported_V1.0.0/config.json"));
+                           "7654321_FlatModel_V1.0.0/config.json"));
 
         fs::remove_all(tempArchiveDir);
         fs::remove_all(testModelDir + "/" + std::string(cosmo::util::kNewDirPrefix) +
-                       "0000000_imported_V1.0.0");
+                       "7654321_FlatModel_V1.0.0");
         fs::remove(tarFile);
+    }
+
+    SECTION("ImportModel rejects invalid model file_name mappings") {
+        struct CaseSpec {
+            std::string label;
+            nlohmann::json config;
+            std::vector<std::pair<std::string, std::string>> files;
+        };
+
+        const std::string mismatchFile =
+#ifdef COSMO_NN_USE_CPU_BACKEND
+            "model.bmodel";
+#else
+            "model.onnx";
+#endif
+
+        const std::vector<CaseSpec> cases = {
+            {"missing file_name target",
+             {{"algorithm_code", "1111111"},
+              {"chip_type", cosmo::util::kEngineType},
+              {"version", "V1.0.0"},
+              {"models", {{{"name", "Broken"}, {"file_name", "missing" + std::string(cosmo::util::kModelFileExt)}}}}},
+             {}},
+            {"escaping file_name",
+             {{"algorithm_code", "1111112"},
+              {"chip_type", cosmo::util::kEngineType},
+              {"version", "V1.0.0"},
+              {"models", {{{"name", "Broken"}, {"file_name", "../escape" + std::string(cosmo::util::kModelFileExt)}}}}},
+             {{"model" + std::string(cosmo::util::kModelFileExt), "fake"}}},
+            {"duplicate file_name",
+             {{"algorithm_code", "1111113"},
+              {"chip_type", cosmo::util::kEngineType},
+              {"version", "V1.0.0"},
+              {"models",
+               {{{"name", "Net0"}, {"file_name", "shared" + std::string(cosmo::util::kModelFileExt)}},
+                {{"name", "Net1"}, {"file_name", "shared" + std::string(cosmo::util::kModelFileExt)}}}}},
+             {{"shared" + std::string(cosmo::util::kModelFileExt), "fake"}}},
+            {"mismatched platform artifact",
+             {{"algorithm_code", "1111114"},
+              {"chip_type", cosmo::util::kEngineType},
+              {"version", "V1.0.0"},
+              {"models", {{{"name", "Broken"}, {"file_name", mismatchFile}}}}},
+             {{mismatchFile, "fake"}}},
+        };
+
+        for (size_t index = 0; index < cases.size(); ++index) {
+            const auto& spec = cases[index];
+            INFO(spec.label);
+            const std::string tempArchiveDir = "/tmp/cosmo_test_invalid_import_" + std::to_string(index);
+            fs::remove_all(tempArchiveDir);
+            fs::create_directories(tempArchiveDir + "/broken_model");
+            {
+                std::ofstream outCfg(tempArchiveDir + "/broken_model/config.json");
+                outCfg << spec.config.dump();
+            }
+            for (const auto& file : spec.files) {
+                std::ofstream out(tempArchiveDir + "/broken_model/" + file.first);
+                out << file.second;
+            }
+
+            const std::string tarFile = testUploadDir + "/invalid_" + std::to_string(index) + ".tar.gz";
+            const std::string cmd     = "cd " + tempArchiveDir + " && tar -czf " + tarFile + " broken_model";
+            (void)!system(cmd.c_str());
+
+            REQUIRE(importExporter.ImportModel(tarFile) == cosmo::util::ErrorEnum::InvalidParam);
+            REQUIRE_FALSE(fs::exists(testModelDir + "/broken_model"));
+
+            fs::remove_all(tempArchiveDir);
+            fs::remove(tarFile);
+        }
     }
 
     SECTION("2.4 ExportModelConfig：验证 tar.gz 创建") {
@@ -484,12 +557,15 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
         const std::string archiveDir = testRoot + "/unsafe_flat_archive";
         fs::create_directories(archiveDir);
         std::ofstream(archiveDir + "/config.json")
-            << R"({"algorithm_code":"../../escape","version":"V1.0.0","models":[{"name":"safe"}]})";
-        std::ofstream(archiveDir + "/model.bmodel") << "fake";
+            << "{\"algorithm_code\":\"../../escape\",\"chip_type\":\"" << cosmo::util::kEngineType
+            << "\",\"version\":\"V1.0.0\",\"models\":[{\"name\":\"safe\",\"file_name\":\"model"
+            << std::string(cosmo::util::kModelFileExt) << "\"}]}";
+        std::ofstream(archiveDir + "/model" + std::string(cosmo::util::kModelFileExt)) << "fake";
 
         const std::string archivePath = testUploadDir + "/unsafe_flat.tar.gz";
         const std::string command =
-            "tar -czf " + archivePath + " -C " + archiveDir + " config.json model.bmodel";
+            "tar -czf " + archivePath + " -C " + archiveDir + " config.json model" +
+            std::string(cosmo::util::kModelFileExt);
         REQUIRE(system(command.c_str()) == 0);
 
         REQUIRE(importExporter.ImportModel(archivePath) == cosmo::util::ErrorEnum::InvalidParam);

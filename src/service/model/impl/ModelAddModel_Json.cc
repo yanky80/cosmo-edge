@@ -297,6 +297,10 @@ void ModelImportExporter::UpdateTemplateConfig(nlohmann::json& templateDoc, cons
                     modelObj["file_name"] = (i == 0) ? "sam2_encoder.onnx" : "sam2_decoder.onnx";
                 }
 
+                if (!isSam2) {
+                    modelObj["file_name"] = "model" + std::string(cosmo::util::kModelFileExt);
+                }
+
                 if (!isSam2 && bmodelInfo.valid && !bmodelInfo.networks.empty()) {
                     const auto& network   = bmodelInfo.networks[0];
                     modelObj["max_batch"] = network.max_batch;

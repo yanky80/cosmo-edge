@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <set>
 #include <regex>
 #include <string>
 #include <vector>
@@ -14,10 +15,43 @@
 #include "util/ErrorCode.h"
 #include "util/JsonFileUtil.h"
 #include "util/Log.h"
+#include "util/NnBackendConstants.h"
+#include "util/PathUtil.h"
 
 namespace cosmo::service::detail {
 
 namespace fs = std::filesystem;
+
+namespace {
+
+    bool ResolveArtifactPath(const std::string& model_dir, const std::string& file_name,
+                             std::string& resolved_path) {
+        const fs::path artifact_name(file_name);
+        if (file_name.empty() || artifact_name.has_parent_path() || artifact_name.filename() != artifact_name ||
+            !cosmo::path::IsSafePathComponent(file_name, 200)) {
+            return false;
+        }
+        return cosmo::path::ResolveExistingPathWithinRoot(
+            model_dir, (fs::path(model_dir) / artifact_name).string(), cosmo::path::PathEntryType::kRegularFile,
+            resolved_path);
+    }
+
+    std::vector<std::string> ScanLegacyArtifacts(const std::string& model_dir) {
+        std::vector<std::string> artifacts;
+        std::error_code ec;
+        for (fs::directory_iterator it(model_dir, ec), end; !ec && it != end; it.increment(ec)) {
+            if (!it->is_regular_file())
+                continue;
+            const auto extension = it->path().extension().string();
+            if (!cosmo::util::IsSupportedModelFileExtension(extension))
+                continue;
+            artifacts.push_back(it->path().string());
+        }
+        std::sort(artifacts.begin(), artifacts.end());
+        return artifacts;
+    }
+
+}  // namespace
 
 // ─────────────────────────────────────────────────────────────
 // Public API
@@ -111,6 +145,76 @@ std::string ModelConfigParser::JoinShape(const std::vector<int>& shape) {
         result += std::to_string(shape[i]);
     }
     return result;
+}
+
+bool ModelConfigParser::ResolveModelArtifacts(const std::string& config_path, const std::string& model_dir,
+                                              ResolvedModelArtifacts& artifacts, std::string& error) {
+    artifacts = {};
+    error.clear();
+
+    nlohmann::json doc;
+    if (cosmo::util::JsonFileUtil::ReadJsonFile(config_path, doc) != cosmo::util::ErrorEnum::Success) {
+        error = "cannot read config.json";
+        return false;
+    }
+    if (!doc.contains("models") || !doc["models"].is_array() || doc["models"].empty()) {
+        error = "config.json missing models[]";
+        return false;
+    }
+
+    std::vector<std::string> listed_files;
+    listed_files.reserve(doc["models"].size());
+    bool saw_listed_file = false;
+    bool saw_empty_file  = false;
+    for (const auto& model : doc["models"]) {
+        if (!model.is_object()) {
+            error = "config.json models[] must contain objects";
+            return false;
+        }
+        const std::string file_name =
+            (model.contains("file_name") && model["file_name"].is_string()) ? model["file_name"].get<std::string>()
+                                                                            : std::string();
+        if (file_name.empty()) {
+            saw_empty_file = true;
+            continue;
+        }
+        saw_listed_file = true;
+        listed_files.push_back(file_name);
+    }
+
+    if (saw_listed_file) {
+        if (saw_empty_file || listed_files.size() != doc["models"].size()) {
+            error = "every model must declare file_name once any file_name is set";
+            return false;
+        }
+
+        std::set<std::string> seen_files;
+        for (const auto& file_name : listed_files) {
+            std::string resolved_path;
+            if (!ResolveArtifactPath(model_dir, file_name, resolved_path)) {
+                error = "model file_name is missing or escapes package root: " + file_name;
+                return false;
+            }
+            if (!cosmo::util::IsSupportedModelFileExtension(fs::path(resolved_path).extension().string())) {
+                error = "model file_name does not match the compiled platform profile: " + file_name;
+                return false;
+            }
+            if (!seen_files.insert(file_name).second) {
+                error = "duplicate model file_name: " + file_name;
+                return false;
+            }
+            artifacts.paths.push_back(std::move(resolved_path));
+        }
+        return true;
+    }
+
+    artifacts.paths = ScanLegacyArtifacts(model_dir);
+    if (artifacts.paths.empty()) {
+        error = "no compatible model artifact found";
+        return false;
+    }
+    artifacts.used_compatibility_fallback = true;
+    return true;
 }
 
 // ─────────────────────────────────────────────────────────────

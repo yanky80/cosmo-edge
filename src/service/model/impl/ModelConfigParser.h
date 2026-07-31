@@ -38,6 +38,11 @@ struct ParsedModelConfig {
     bool valid{false};  // True if algorithm_code was successfully parsed
 };
 
+struct ResolvedModelArtifacts {
+    std::vector<std::string> paths;
+    bool used_compatibility_fallback{false};
+};
+
 // Static utility that reads and parses a model's config.json into ParsedModelConfig.
 class ModelConfigParser {
 public:
@@ -56,6 +61,12 @@ public:
 
     // Join a shape vector (e.g., {1, 3, 640, 640}) into a comma-separated string.
     static std::string JoinShape(const std::vector<int>& shape);
+
+    // Resolve backend-supported model artifacts for the package rooted at `model_dir`.
+    // New packages must list every model via models[].file_name. Legacy packages with
+    // only empty file_name values fall back to scanning compiled-platform extensions.
+    static bool ResolveModelArtifacts(const std::string& config_path, const std::string& model_dir,
+                                      ResolvedModelArtifacts& artifacts, std::string& error);
 
 private:
     // Parse the "labels" array from a nlohmann::json Document.

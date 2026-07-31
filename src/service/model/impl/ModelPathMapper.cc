@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "nlohmann/json.hpp"
+#include "service/model/impl/ModelConfigParser.h"
 #include "service/system/IAppInfoService.h"
 #include "util/Log.h"
 #include "util/NnBackendConstants.h"
@@ -26,20 +27,6 @@ namespace {
         }
         cfgPath = p.string();
         return true;
-    }
-
-    std::vector<std::string> GetFileWithExtension(const std::string& directory,
-                                                  const std::string& extension) {
-        std::vector<std::string> files;
-        if (!std::filesystem::exists(directory) || !std::filesystem::is_directory(directory)) {
-            return files;
-        }
-        for (auto& entry : std::filesystem::directory_iterator(directory)) {
-            if (std::filesystem::is_regular_file(entry.path()) && entry.path().extension() == extension) {
-                files.push_back(entry.path().filename().string());
-            }
-        }
-        return files;
     }
 
     bool ResolveOcrCharacterTable(const std::string& directory, const std::string& cfg_path,
@@ -86,6 +73,22 @@ namespace {
         return true;
     }
 
+    bool ResolveManagedModelArtifact(const std::string& directory, std::string& cfg_path, std::string& model_path) {
+        if (!ResolvePipelineCfgPath(directory, cfg_path)) {
+            return false;
+        }
+
+        detail::ResolvedModelArtifacts artifacts;
+        std::string error;
+        if (!detail::ModelConfigParser::ResolveModelArtifacts(cfg_path, directory, artifacts, error)) {
+            LOG_WARN("Model artifact resolution failed in {}: {}", directory, error);
+            return false;
+        }
+
+        model_path = artifacts.paths.size() > 1 ? directory : artifacts.paths.front();
+        return true;
+    }
+
 }  // namespace
 
 void ModelPathMapper::Set(const std::string& algCode, const std::string& modelPath) {
@@ -128,19 +131,7 @@ bool ModelPathMapper::GetModelCfg(const std::string& algCode, std::string& cfgPa
         return false;
     }
     std::string directory = it->second;
-
-    auto model_res = GetFileWithExtension(directory, cosmo::util::kModelFileExt);
-    if (model_res.size() < 1) {
-        LOG_WARN("No Model File. Directory:{}", directory);
-        return false;
-    }
-
-    if (!ResolvePipelineCfgPath(directory, cfgPath)) {
-        return false;
-    }
-
-    modelPath = model_res.size() > 1 ? directory : (std::filesystem::path(directory) / model_res[0]).string();
-    return true;
+    return ResolveManagedModelArtifact(directory, cfgPath, modelPath);
 }
 
 bool ModelPathMapper::GetModelCfg(const std::string& algCode, std::string& cfgPath, std::string& modelPath,
@@ -164,22 +155,13 @@ bool ModelPathMapper::GetModelCfg(const std::string& algCode, std::string& cfgPa
         return false;
     }
     std::string directory = it->second;
-
-    auto model_res = GetFileWithExtension(directory, cosmo::util::kModelFileExt);
-    if (model_res.size() < 1) {
-        LOG_INFO("No Model File. Directory:{}", directory);
-        return false;
-    }
-
-    if (!ResolvePipelineCfgPath(directory, cfgPath)) {
+    if (!ResolveManagedModelArtifact(directory, cfgPath, modelPath)) {
         return false;
     }
 
     if (!ResolveOcrCharacterTable(directory, cfgPath, wordDictPath)) {
         return false;
     }
-
-    modelPath = model_res.size() > 1 ? directory : (std::filesystem::path(directory) / model_res[0]).string();
     LOG_INFO("algCode:{}, modelPath:{}, cfgPath:{}, wordDictPath:{}", algCode, modelPath, cfgPath,
              wordDictPath);
     return true;
