@@ -9,12 +9,14 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <numeric>
 #include <regex>
 #include <sstream>
 #include <system_error>
+#include <vector>
 
 #include "nlohmann/json.hpp"
 #include "service/model/impl/ModelConfigParser.h"
@@ -22,10 +24,15 @@
 #include "util/ErrorCode.h"
 #include "util/Exception.h"
 #include "util/Exec.h"
+#include "util/JsonFileUtil.h"
 #include "util/NnBackendConstants.h"
 #include "util/PathUtil.h"
 #include "util/ResourceBudget.h"
 #include "util/UuidUtil.h"
+
+#ifdef COSMO_NN_USE_RKNN_BACKEND
+#include "rknn_api.h"
+#endif
 
 namespace cosmo::service {
 
@@ -161,30 +168,395 @@ namespace {
         return !ec;
     }
 
-    bool ValidateImportedModelPackage(const std::string& model_dir, std::string& alg_code) {
-        const std::string config_path = (std::filesystem::path(model_dir) / "config.json").string();
-        const auto parsed             = detail::ModelConfigParser::Parse(config_path);
-        if (!parsed.valid) {
-            LOG_WARN("[ImportModel] Invalid config.json in {}", model_dir);
+    bool IsRk3588ChipType(const std::string& chip_type) {
+        return std::equal(chip_type.begin(), chip_type.end(), "RK3588", "RK3588" + 6,
+                          [](char lhs, char rhs) {
+                              return std::toupper(static_cast<unsigned char>(lhs)) ==
+                                     std::toupper(static_cast<unsigned char>(rhs));
+                          });
+    }
+
+    bool IsKnownModelArtifact(const std::filesystem::path& path) {
+        const auto extension = path.extension().string();
+        return extension == ".onnx" || extension == ".nn" || extension == ".bmodel" || extension == ".rknn";
+    }
+
+    std::vector<std::string> ScanPackageArtifacts(const std::string& model_dir) {
+        namespace fs = std::filesystem;
+        std::vector<std::string> artifacts;
+        std::error_code ec;
+        for (fs::directory_iterator it(model_dir, ec), end; !ec && it != end; it.increment(ec)) {
+            if (!it->is_regular_file() || !IsKnownModelArtifact(it->path()))
+                continue;
+            artifacts.push_back(it->path().string());
+        }
+        std::sort(artifacts.begin(), artifacts.end());
+        return artifacts;
+    }
+
+    bool ResolvePackageArtifactPath(const std::string& model_dir, const std::string& file_name,
+                                    std::string& resolved_path) {
+        const std::filesystem::path artifact_name(file_name);
+        if (file_name.empty() || artifact_name.has_parent_path() || artifact_name.filename() != artifact_name ||
+            !cosmo::path::IsSafePathComponent(file_name, 200)) {
             return false;
         }
-        if (!cosmo::util::IsSupportedChip(parsed.chip_type)) {
-            LOG_WARN("[ImportModel] Unsupported chip_type {} in {}", parsed.chip_type, model_dir);
+        return cosmo::path::ResolveExistingPathWithinRoot(
+            model_dir, (std::filesystem::path(model_dir) / artifact_name).string(),
+            cosmo::path::PathEntryType::kRegularFile, resolved_path);
+    }
+
+    std::vector<int> ReadShape(const nlohmann::json& tensor) {
+        std::vector<int> shape;
+        if (!tensor.contains("shape") || !tensor["shape"].is_array())
+            return shape;
+        for (const auto& value : tensor["shape"]) {
+            if (!value.is_number_integer())
+                return {};
+            shape.push_back(value.get<int>());
+        }
+        return shape;
+    }
+
+    std::string JoinShape(const std::vector<int>& shape) {
+        std::ostringstream stream;
+        stream << '[';
+        for (std::size_t index = 0; index < shape.size(); ++index) {
+            if (index != 0)
+                stream << ',';
+            stream << shape[index];
+        }
+        stream << ']';
+        return stream.str();
+    }
+
+    std::string DescribeConfigTensor(const nlohmann::json& tensor) {
+        std::ostringstream stream;
+        stream << "name=" << tensor.value("name", "?") << " shape=" << JoinShape(ReadShape(tensor))
+               << " data_type=" << tensor.value("data_type", -1);
+        if (tensor.contains("scale"))
+            stream << " scale=" << tensor.value("scale", 0.0F);
+        if (tensor.contains("zero_point"))
+            stream << " zp=" << tensor.value("zero_point", 0);
+        return stream.str();
+    }
+
+    std::string DescribeRuntimeTensor(const ModelImportExporter::TensorMetadata& tensor) {
+        std::ostringstream stream;
+        stream << "name=" << tensor.name << " shape=" << JoinShape(tensor.dims) << " fmt=" << tensor.format
+               << " type=" << tensor.type << " quant=" << tensor.quant_type << " scale=" << tensor.scale
+               << " zp=" << tensor.zero_point;
+        return stream.str();
+    }
+
+    std::string MakeValidationError(const std::string& stage, const std::string& config_path,
+                                    const std::string& model_dir, const std::string& detail) {
+        return "stage=" + stage + " config=" + config_path + " model_dir=" + model_dir + " " + detail;
+    }
+
+    bool NearlyEqual(float lhs, float rhs) {
+        return std::fabs(lhs - rhs) <= 1.0e-6F;
+    }
+
+    bool LoadRknnMetadataFromRuntime(const std::string& artifact_path, ModelImportExporter::RknnModelMetadata& metadata,
+                                     std::string& error) {
+#ifdef COSMO_NN_USE_RKNN_BACKEND
+        const auto to_tensor_metadata = [](const std::string& name, const std::vector<int>& dims,
+                                           const std::string& format, const std::string& type,
+                                           const std::string& quant_type, int zero_point, float scale) {
+            ModelImportExporter::TensorMetadata tensor;
+            tensor.name       = name;
+            tensor.dims       = dims;
+            tensor.format     = format;
+            tensor.type       = type;
+            tensor.quant_type = quant_type;
+            tensor.zero_point = zero_point;
+            tensor.scale      = scale;
+            return tensor;
+        };
+        std::ifstream stream(artifact_path, std::ios::binary);
+        if (!stream.is_open()) {
+            error = "stage=rknn-open artifact=" + artifact_path + " cannot open .rknn file";
+            return false;
+        }
+        const std::vector<unsigned char> model((std::istreambuf_iterator<char>(stream)),
+                                               std::istreambuf_iterator<char>());
+        if (model.empty()) {
+            error = "stage=rknn-open artifact=" + artifact_path + " empty .rknn file";
             return false;
         }
 
-        detail::ResolvedModelArtifacts artifacts;
-        std::string error;
-        if (!detail::ModelConfigParser::ResolveModelArtifacts(config_path, model_dir, artifacts, error)) {
-            LOG_WARN("[ImportModel] Invalid artifact mapping in {}: {}", model_dir, error);
+        rknn_context ctx = 0;
+        const int init_ret =
+            rknn_init(&ctx, const_cast<unsigned char*>(model.data()), static_cast<uint32_t>(model.size()), 0, nullptr);
+        if (init_ret != RKNN_SUCC) {
+            error = "stage=rknn-open artifact=" + artifact_path + " rknn_init ret=" + std::to_string(init_ret);
             return false;
         }
 
-        alg_code = parsed.algorithm_code;
+        struct ContextGuard {
+            rknn_context ctx;
+            ~ContextGuard() {
+                if (ctx != 0)
+                    (void)rknn_destroy(ctx);
+            }
+        } guard{ctx};
+
+        rknn_input_output_num io_num{};
+        const int io_ret = rknn_query(ctx, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num));
+        if (io_ret != RKNN_SUCC) {
+            error = "stage=rknn-query artifact=" + artifact_path + " RKNN_QUERY_IN_OUT_NUM ret=" +
+                    std::to_string(io_ret);
+            return false;
+        }
+
+        metadata.inputs.clear();
+        metadata.outputs.clear();
+        for (uint32_t index = 0; index < io_num.n_input; ++index) {
+            rknn_tensor_attr attr{};
+            attr.index      = index;
+            const int query = rknn_query(ctx, RKNN_QUERY_INPUT_ATTR, &attr, sizeof(attr));
+            if (query != RKNN_SUCC) {
+                error = "stage=rknn-query artifact=" + artifact_path + " RKNN_QUERY_INPUT_ATTR[" +
+                        std::to_string(index) + "] ret=" + std::to_string(query);
+                return false;
+            }
+            metadata.inputs.push_back(
+                to_tensor_metadata(attr.name, std::vector<int>(attr.dims, attr.dims + attr.n_dims),
+                                   get_format_string(attr.fmt), get_type_string(attr.type),
+                                   get_qnt_type_string(attr.qnt_type), attr.zp, attr.scale));
+        }
+        for (uint32_t index = 0; index < io_num.n_output; ++index) {
+            rknn_tensor_attr attr{};
+            attr.index      = index;
+            const int query = rknn_query(ctx, RKNN_QUERY_OUTPUT_ATTR, &attr, sizeof(attr));
+            if (query != RKNN_SUCC) {
+                error = "stage=rknn-query artifact=" + artifact_path + " RKNN_QUERY_OUTPUT_ATTR[" +
+                        std::to_string(index) + "] ret=" + std::to_string(query);
+                return false;
+            }
+            metadata.outputs.push_back(
+                to_tensor_metadata(attr.name, std::vector<int>(attr.dims, attr.dims + attr.n_dims),
+                                   get_format_string(attr.fmt), get_type_string(attr.type),
+                                   get_qnt_type_string(attr.qnt_type), attr.zp, attr.scale));
+        }
         return true;
+#else
+        (void)artifact_path;
+        metadata = {};
+        error    = "stage=rknn-open RKNN metadata loader unavailable in this build";
+        return false;
+#endif
     }
 
 }  // namespace
+
+bool ModelImportExporter::ValidateImportedModelPackage(const std::string& model_dir, std::string& alg_code,
+                                                       std::string& error) {
+    const std::string config_path = (std::filesystem::path(model_dir) / "config.json").string();
+    const auto parsed             = detail::ModelConfigParser::Parse(config_path);
+    if (!parsed.valid) {
+        error = MakeValidationError("config", config_path, model_dir, "invalid config.json");
+        return false;
+    }
+    if (!cosmo::util::IsSupportedChip(parsed.chip_type)) {
+        error = MakeValidationError("platform", config_path, model_dir,
+                                    "unsupported chip_type=" + parsed.chip_type);
+        return false;
+    }
+    detail::ResolvedModelArtifacts artifacts;
+    std::string artifact_error;
+    if (!detail::ModelConfigParser::ResolveModelArtifacts(config_path, model_dir, artifacts, artifact_error)) {
+        error = MakeValidationError("artifact", config_path, model_dir, artifact_error);
+        return false;
+    }
+    if (!ValidateModelPackageContract(config_path, model_dir, error))
+        return false;
+
+    alg_code = parsed.algorithm_code;
+    return true;
+}
+
+bool ModelImportExporter::ValidateModelPackageContract(const std::string& config_path,
+                                                       const std::string& model_dir, std::string& error) {
+    error.clear();
+
+    nlohmann::json doc;
+    if (cosmo::util::JsonFileUtil::ReadJsonFile(config_path, doc) != cosmo::util::ErrorEnum::Success) {
+        error = MakeValidationError("config", config_path, model_dir, "cannot read config.json");
+        return false;
+    }
+
+    const std::string chip_type  = doc.value("chip_type", std::string());
+    const std::string model_type = doc.value("model_type", std::string());
+    if (!IsRk3588ChipType(chip_type))
+        return true;
+
+    if (model_type != "yolo26_det") {
+        error = MakeValidationError("config", config_path, model_dir,
+                                    "RK3588 package only supports model_type=yolo26_det, got=" + model_type);
+        return false;
+    }
+
+    if (!doc.contains("models") || !doc["models"].is_array() || doc["models"].size() != 1 ||
+        !doc["models"][0].is_object()) {
+        error = MakeValidationError("config", config_path, model_dir,
+                                    "RK3588 YOLO26 package must declare exactly one models[] entry");
+        return false;
+    }
+
+    const auto& model = doc["models"][0];
+    const std::string file_name = model.value("file_name", std::string());
+    std::string artifact_path;
+    if (!ResolvePackageArtifactPath(model_dir, file_name, artifact_path)) {
+        error = MakeValidationError("artifact", config_path, model_dir,
+                                    "RK3588 package must declare one explicit .rknn file_name");
+        return false;
+    }
+    if (std::filesystem::path(artifact_path).extension() != ".rknn") {
+        error = MakeValidationError("artifact", config_path, model_dir,
+                                    "RK3588 package artifact must be .rknn: " + artifact_path);
+        return false;
+    }
+
+    const auto package_artifacts = ScanPackageArtifacts(model_dir);
+    if (package_artifacts.size() != 1 || package_artifacts.front() != artifact_path) {
+        std::ostringstream detail;
+        detail << "single-artifact RK3588 package expected exactly one .rknn artifact, found "
+               << package_artifacts.size();
+        for (const auto& path : package_artifacts)
+            detail << " [" << std::filesystem::path(path).filename().string() << "]";
+        error = MakeValidationError("artifact", config_path, model_dir, detail.str());
+        return false;
+    }
+
+    const auto& params =
+        model.contains("params") && model["params"].is_object() ? model["params"] : nlohmann::json::object();
+    if (params.value("preprocess_mode", std::string()) != "image_to_tensor") {
+        error = MakeValidationError("config", config_path, model_dir,
+                                    "RK3588 YOLO26 package requires params.preprocess_mode=image_to_tensor");
+        return false;
+    }
+    if (params.value("output_format", std::string()) != "yolo26_raw") {
+        error = MakeValidationError("config", config_path, model_dir,
+                                    "RK3588 YOLO26 package requires params.output_format=yolo26_raw");
+        return false;
+    }
+    if (params.value("reg_max", 1) != 1) {
+        error = MakeValidationError("config", config_path, model_dir, "RK3588 YOLO26 package requires reg_max=1");
+        return false;
+    }
+    if (!params.contains("input_size") || !params["input_size"].is_array() || params["input_size"].size() != 2) {
+        error = MakeValidationError("config", config_path, model_dir,
+                                    "RK3588 YOLO26 package requires params.input_size=[w,h]");
+        return false;
+    }
+
+    if (!model.contains("inputs") || !model["inputs"].is_array() || model["inputs"].size() != 1) {
+        error = MakeValidationError("config", config_path, model_dir,
+                                    "RK3588 YOLO26 package must declare one NHWC input tensor");
+        return false;
+    }
+    if (!model.contains("outputs") || !model["outputs"].is_array() || model["outputs"].size() != 6) {
+        error = MakeValidationError("config", config_path, model_dir,
+                                    "RK3588 YOLO26 package must declare six NCHW output tensors");
+        return false;
+    }
+
+    const auto input_size = ReadShape(nlohmann::json{{"shape", params["input_size"]}});
+    const auto input_w    = input_size.at(0);
+    const auto input_h    = input_size.at(1);
+    const auto input_cfg  = model["inputs"][0];
+    const auto input_shape = ReadShape(input_cfg);
+    if (input_shape != std::vector<int>{1, input_h, input_w, 3} || input_cfg.value("data_type", -1) != 4) {
+        error = MakeValidationError("config", config_path, model_dir,
+                                    "RK3588 YOLO26 input must be NHWC UINT8 [1,H,W,3]: " +
+                                        DescribeConfigTensor(input_cfg));
+        return false;
+    }
+
+    int class_count = -1;
+    for (std::size_t index = 0; index < model["outputs"].size(); index += 2) {
+        const auto& reg_cfg = model["outputs"][index];
+        const auto& cls_cfg = model["outputs"][index + 1];
+        const auto reg_shape = ReadShape(reg_cfg);
+        const auto cls_shape = ReadShape(cls_cfg);
+        const bool reg_ok = reg_cfg.value("data_type", -1) == 5 && reg_shape.size() == 4 && reg_shape[0] == 1 &&
+                            reg_shape[1] == 4 && reg_shape[2] > 0 && reg_shape[3] > 0 &&
+                            reg_cfg.contains("scale") && reg_cfg.contains("zero_point") &&
+                            reg_cfg.value("scale", 0.0F) > 0.0F;
+        const bool cls_ok = cls_cfg.value("data_type", -1) == 5 && cls_shape.size() == 4 && cls_shape[0] == 1 &&
+                            cls_shape[1] > 0 && cls_shape[2] == reg_shape[2] && cls_shape[3] == reg_shape[3] &&
+                            cls_cfg.contains("scale") && cls_cfg.contains("zero_point") &&
+                            cls_cfg.value("scale", 0.0F) > 0.0F;
+        if (!reg_ok || !cls_ok) {
+            error = MakeValidationError("config", config_path, model_dir,
+                                        "invalid RK3588 YOLO26 output pair: " + DescribeConfigTensor(reg_cfg) +
+                                            " | " + DescribeConfigTensor(cls_cfg));
+            return false;
+        }
+        if (input_h % reg_shape[2] != 0 || input_w % reg_shape[3] != 0 ||
+            input_h / reg_shape[2] != input_w / reg_shape[3]) {
+            error = MakeValidationError("config", config_path, model_dir,
+                                        "output feature map does not divide input_size cleanly: " +
+                                            DescribeConfigTensor(reg_cfg));
+            return false;
+        }
+        if (class_count == -1)
+            class_count = cls_shape[1];
+        else if (class_count != cls_shape[1]) {
+            error = MakeValidationError("config", config_path, model_dir,
+                                        "output class channels must match across scales");
+            return false;
+        }
+    }
+
+    auto metadata_loader = rknn_metadata_loader_;
+    if (!metadata_loader)
+        metadata_loader = LoadRknnMetadataFromRuntime;
+
+    RknnModelMetadata metadata;
+    std::string metadata_error;
+    if (!metadata_loader(artifact_path, metadata, metadata_error)) {
+        error = MakeValidationError("rknn", config_path, model_dir,
+                                    metadata_error + " artifact=" + artifact_path);
+        return false;
+    }
+    if (metadata.inputs.size() != 1 || metadata.outputs.size() != 6) {
+        std::ostringstream detail;
+        detail << "expected 1 input and 6 outputs from RKNN metadata, got inputs=" << metadata.inputs.size()
+               << " outputs=" << metadata.outputs.size();
+        error = MakeValidationError("rknn", config_path, model_dir, detail.str());
+        return false;
+    }
+
+    const auto& runtime_input = metadata.inputs.front();
+    if (runtime_input.format != "NHWC" || runtime_input.type != "UINT8" ||
+        runtime_input.dims != std::vector<int>{1, input_h, input_w, 3}) {
+        error = MakeValidationError("input", config_path, model_dir,
+                                    "expected NHWC UINT8 input " + DescribeConfigTensor(input_cfg) + ", got " +
+                                        DescribeRuntimeTensor(runtime_input));
+        return false;
+    }
+
+    for (std::size_t index = 0; index < metadata.outputs.size(); ++index) {
+        const auto& runtime_output = metadata.outputs[index];
+        const auto& config_output  = model["outputs"][index];
+        const auto config_shape    = ReadShape(config_output);
+        const bool matches = runtime_output.format == "NCHW" && runtime_output.type == "INT8" &&
+                             runtime_output.quant_type == "AFFINE" && runtime_output.dims == config_shape &&
+                             runtime_output.zero_point == config_output.value("zero_point", 0) &&
+                             NearlyEqual(runtime_output.scale, config_output.value("scale", 0.0F));
+        if (!matches) {
+            error = MakeValidationError("output[" + std::to_string(index) + "]", config_path, model_dir,
+                                        "config=" + DescribeConfigTensor(config_output) +
+                                            " runtime=" + DescribeRuntimeTensor(runtime_output));
+            return false;
+        }
+    }
+
+    return true;
+}
 
 util::ErrorEnum ModelImportExporter::ImportFlatArchive(const std::string& temp_dir,
                                                        const std::string& models_dir) {
@@ -307,12 +679,13 @@ util::ErrorEnum ModelImportExporter::ImportDirectoryArchive(const std::string& t
 
         // Validate against the package config and compiled platform profile.
         std::string sub_alg_code;
+        std::string validation_error;
         if (!fs::exists(sub_dir + "/config.json")) {
             LOG_WARN("[ImportModel] Skipping directory without config.json: {}", sub_dir_name);
             continue;
         }
-        if (!ValidateImportedModelPackage(sub_dir, sub_alg_code)) {
-            LOG_WARN("[ImportModel] Skipping invalid model package: {}", sub_dir_name);
+        if (!ValidateImportedModelPackage(sub_dir, sub_alg_code, validation_error)) {
+            LOG_WARN("[ImportModel] Skipping invalid model package {}: {}", sub_dir_name, validation_error);
             continue;
         }
 
@@ -427,11 +800,12 @@ util::ErrorEnum ModelImportExporter::ImportModel(const std::string& archivePath)
 
     // Check if the extracted content is a flat structure.
     bool flat_structure = false;
+    std::string validation_error;
     if (fs::exists(temp_dir + "/config.json")) {
         std::string flat_alg_code;
-        flat_structure = ValidateImportedModelPackage(temp_dir, flat_alg_code);
+        flat_structure = ValidateImportedModelPackage(temp_dir, flat_alg_code, validation_error);
         if (!flat_structure) {
-            LOG_WARN("{}", "[ImportModel] Flat archive config/artifacts do not match the compiled platform");
+            LOG_WARN("[ImportModel] Flat archive validation failed: {}", validation_error);
         }
     }
 

@@ -28,6 +28,55 @@ using namespace cosmo::service;
 using namespace cosmo::test;
 namespace fs = std::filesystem;
 
+namespace {
+
+nlohmann::json MakeRk3588Yolo26Config() {
+    return {
+        {"algorithm_code", "8888001"},
+        {"chip_type", "RK3588"},
+        {"model_type", "yolo26_det"},
+        {"version", "V1.0.0"},
+        {"models",
+         {{{"name", "rk_yolo26"},
+           {"file_name", "model.rknn"},
+           {"max_batch", 1},
+           {"inputs", {{{"name", "images"}, {"shape", {1, 640, 640, 3}}, {"data_type", 4}}}},
+           {"outputs",
+            {{{"name", "reg0"}, {"shape", {1, 4, 80, 80}}, {"data_type", 5}, {"scale", 0.5}, {"zero_point", 0}},
+             {{"name", "cls0"}, {"shape", {1, 1, 80, 80}}, {"data_type", 5}, {"scale", 0.1}, {"zero_point", 0}},
+             {{"name", "reg1"}, {"shape", {1, 4, 40, 40}}, {"data_type", 5}, {"scale", 0.5}, {"zero_point", 0}},
+             {{"name", "cls1"}, {"shape", {1, 1, 40, 40}}, {"data_type", 5}, {"scale", 0.1}, {"zero_point", 0}},
+             {{"name", "reg2"}, {"shape", {1, 4, 20, 20}}, {"data_type", 5}, {"scale", 0.5}, {"zero_point", 0}},
+             {{"name", "cls2"}, {"shape", {1, 1, 20, 20}}, {"data_type", 5}, {"scale", 0.1}, {"zero_point", 0}}}},
+           {"params",
+            {{"preprocess_mode", "image_to_tensor"},
+             {"output_format", "yolo26_raw"},
+             {"input_size", {640, 640}},
+             {"padding_color", {114, 114, 114}},
+             {"confidence_threshold", 0.25},
+             {"nms_threshold", 0.45},
+             {"top_k", 300},
+             {"reg_max", 1}}}}}}
+    };
+}
+
+ModelImportExporter::RknnModelMetadata MakeRknnYolo26Metadata() {
+    using Tensor = ModelImportExporter::TensorMetadata;
+    ModelImportExporter::RknnModelMetadata metadata;
+    metadata.inputs.push_back({"images", {1, 640, 640, 3}, "NHWC", "UINT8", "NONE", 0, 0.0F});
+    metadata.outputs = {
+        Tensor{"reg0", {1, 4, 80, 80}, "NCHW", "INT8", "AFFINE", 0, 0.5F},
+        Tensor{"cls0", {1, 1, 80, 80}, "NCHW", "INT8", "AFFINE", 0, 0.1F},
+        Tensor{"reg1", {1, 4, 40, 40}, "NCHW", "INT8", "AFFINE", 0, 0.5F},
+        Tensor{"cls1", {1, 1, 40, 40}, "NCHW", "INT8", "AFFINE", 0, 0.1F},
+        Tensor{"reg2", {1, 4, 20, 20}, "NCHW", "INT8", "AFFINE", 0, 0.5F},
+        Tensor{"cls2", {1, 1, 20, 20}, "NCHW", "INT8", "AFFINE", 0, 0.1F},
+    };
+    return metadata;
+}
+
+}  // namespace
+
 TEST_CASE("ModelImportExporter Tests", "[model]") {
     MockServiceRegistry mocks;
     ModelImportExporter importExporter;
@@ -415,7 +464,7 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
             "model.onnx";
 #endif
 
-        const std::vector<CaseSpec> cases = {
+        std::vector<CaseSpec> cases = {
             {"missing file_name target",
              {{"algorithm_code", "1111111"},
               {"chip_type", cosmo::util::kEngineType},
@@ -469,6 +518,96 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
             fs::remove_all(tempArchiveDir);
             fs::remove(tarFile);
         }
+    }
+
+    SECTION("RK3588 YOLO26 package validation accepts the supported contract and rejects mismatches") {
+        const fs::path package_dir = fs::path(testRoot) / "rk3588_yolo26_package";
+        fs::remove_all(package_dir);
+        fs::create_directories(package_dir);
+        std::ofstream(package_dir / "model.rknn") << "fake-rknn";
+
+        struct CaseSpec {
+            std::string label;
+            std::function<void(nlohmann::json&, ModelImportExporter::RknnModelMetadata&, std::string&)> mutate;
+            std::string expected_stage;
+        };
+
+        const std::vector<CaseSpec> cases = {
+            {"valid metadata fixture",
+             [](nlohmann::json&, ModelImportExporter::RknnModelMetadata&, std::string&) {},
+             ""},
+            {"unsupported model type",
+             [](nlohmann::json& config, ModelImportExporter::RknnModelMetadata&, std::string&) {
+                 config["model_type"] = "yolov8_det";
+             },
+             "stage=config"},
+            {"missing explicit artifact",
+             [](nlohmann::json& config, ModelImportExporter::RknnModelMetadata&, std::string&) {
+                 config["models"][0]["file_name"] = "";
+             },
+             "stage=artifact"},
+            {"mixed platform artifacts",
+             [&package_dir](nlohmann::json&, ModelImportExporter::RknnModelMetadata&, std::string&) {
+                 std::ofstream(package_dir / "extra.onnx") << "wrong-platform";
+             },
+             "stage=artifact"},
+            {"NHWC input mismatch",
+             [](nlohmann::json&, ModelImportExporter::RknnModelMetadata& metadata, std::string&) {
+                 metadata.inputs[0].format = "NCHW";
+             },
+             "stage=input"},
+            {"output tensor mismatch",
+             [](nlohmann::json&, ModelImportExporter::RknnModelMetadata& metadata, std::string&) {
+                 metadata.outputs[3].scale = 0.2F;
+             },
+             "stage=output[3]"},
+            {"reg_max mismatch",
+             [](nlohmann::json& config, ModelImportExporter::RknnModelMetadata&, std::string&) {
+                 config["models"][0]["params"]["reg_max"] = 2;
+             },
+             "stage=config"},
+            {"runtime loader failure includes return code",
+             [](nlohmann::json&, ModelImportExporter::RknnModelMetadata&, std::string& loader_error) {
+                 loader_error = "rknn_query ret=-7";
+             },
+             "stage=rknn"},
+        };
+
+        for (const auto& spec : cases) {
+            INFO(spec.label);
+            fs::remove(package_dir / "extra.onnx");
+
+            auto config   = MakeRk3588Yolo26Config();
+            auto metadata = MakeRknnYolo26Metadata();
+            std::string loader_error;
+            spec.mutate(config, metadata, loader_error);
+
+            std::ofstream(package_dir / "config.json") << config.dump();
+            importExporter.SetRknnMetadataLoaderForTest(
+                [metadata, loader_error](const std::string&, ModelImportExporter::RknnModelMetadata& out,
+                                         std::string& error) mutable {
+                    if (!loader_error.empty()) {
+                        error = loader_error;
+                        return false;
+                    }
+                    out = metadata;
+                    return true;
+                });
+
+            std::string error;
+            const bool valid =
+                importExporter.ValidateModelPackageContract((package_dir / "config.json").string(),
+                                                           package_dir.string(), error);
+            if (spec.expected_stage.empty()) {
+                REQUIRE(valid);
+                REQUIRE(error.empty());
+            } else {
+                REQUIRE_FALSE(valid);
+                REQUIRE(error.find(spec.expected_stage) != std::string::npos);
+            }
+        }
+
+        fs::remove_all(package_dir);
     }
 
     SECTION("2.4 ExportModelConfig：验证 tar.gz 创建") {
