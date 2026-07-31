@@ -234,7 +234,7 @@ TEST_CASE("Upload consumers enforce owner purpose and one-shot model paths", "[u
         Model::BmodelFileInfo file;
         file.role     = "main";
         file.uploadId = model.upload_id;
-        request.bmodelFiles.push_back(file);
+        request.modelFiles.push_back(file);
         request.vocabUploadId          = vocab.upload_id;
         request.tokenizerUploadId      = tokenizer.upload_id;
         request.characterTableUploadId = character_table.upload_id;
@@ -260,7 +260,7 @@ TEST_CASE("Upload consumers enforce owner purpose and one-shot model paths", "[u
         Model::BmodelFileInfo decoder;
         decoder.role        = "decoder";
         decoder.uploadId    = other_upload.upload_id;
-        request.bmodelFiles = {encoder, decoder};
+        request.modelFiles = {encoder, decoder};
         std::error_condition error;
         (void)handler.Handle(std::move(request), HttpContext("owner"), error);
         CHECK(error == util::ErrorEnum::AuthFailed);
@@ -467,7 +467,7 @@ TEST_CASE("File-consuming context handlers reject MQTT path requests", "[upload-
         Model::BmodelFileInfo file;
         file.role     = "main";
         file.filePath = "/tmp/model.bmodel";
-        request.bmodelFiles.push_back(file);
+        request.modelFiles.push_back(file);
         std::error_condition error;
         (void)handler.Handle(std::move(request), context, error);
         CHECK(error == util::ErrorEnum::InvalidParam);
@@ -534,6 +534,47 @@ TEST_CASE("Local video accepts the external channel alias and rejects conflicts"
         std::error_condition error;
         (void)handler.Handle(std::move(request), HttpContext("owner"), error);
         CHECK(error == util::ErrorEnum::InvalidParam);
+    }
+}
+
+TEST_CASE("Atomic model upload request accepts modelFiles compatibility contract",
+          "[model][api][compatibility]") {
+    SECTION("modelFiles payload is consumed as the canonical contract") {
+        const auto request = nlohmann::json{{"modelFiles", {{{"role", "main"}, {"uploadId", "upload-1"}}}}}
+                                 .get<Model::MsgAddRecv>();
+        REQUIRE(request.modelFiles.size() == 1);
+        CHECK(request.modelFiles.front().role == "main");
+        CHECK(request.modelFiles.front().uploadId == "upload-1");
+        CHECK_FALSE(request.modelFilesConflict);
+    }
+
+    SECTION("legacy bmodelFiles payload is normalized to modelFiles") {
+        const auto request = nlohmann::json{{"bmodelFiles", {{{"role", "main"}, {"uploadId", "upload-1"}}}}}
+                                 .get<Model::MsgAddRecv>();
+        REQUIRE(request.modelFiles.size() == 1);
+        CHECK(request.modelFiles.front().role == "main");
+        CHECK(request.modelFiles.front().uploadId == "upload-1");
+        CHECK_FALSE(request.modelFilesConflict);
+    }
+
+    SECTION("conflicting aliases fail before staged uploads are consumed") {
+        auto request = nlohmann::json{
+            {"modelFiles", {{{"role", "main"}, {"uploadId", "new-upload"}}}},
+            {"bmodelFiles", {{{"role", "main"}, {"uploadId", "legacy-upload"}}}},
+        }.get<Model::MsgAddRecv>();
+        REQUIRE(request.modelFilesConflict);
+
+        test::MockServiceRegistry mocks;
+        MessageModelHandler handler(mocks.modelSvc);
+        std::error_condition error;
+        (void)handler.Handle(std::move(request), HttpContext("owner"), error);
+        CHECK(error == util::ErrorEnum::InvalidParam);
+    }
+
+    SECTION("empty payload remains invalid") {
+        const auto request = nlohmann::json::object().get<Model::MsgAddRecv>();
+        CHECK(request.modelFiles.empty());
+        CHECK_FALSE(request.modelFilesConflict);
     }
 }
 
