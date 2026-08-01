@@ -146,7 +146,7 @@ public:
     /// @param modelName          Display name.
     /// @param modelType          Model type (detection, recognition, etc.).
     /// @param description        Description text.
-    /// @param bmodelFiles        List of .bmodel file descriptors.
+    /// @param modelFiles         List of model artifact descriptors.
     /// @param vocabFilePath      Path to vocabulary file (for NLP models).
     /// @param tokenizerFilePath  Path to tokenizer file (for NLP models).
     /// @param characterTableFilePath Path to the CTC character table (for OCR models).
@@ -155,7 +155,7 @@ public:
     /// @return ErrorEnum::kSuccess on success.
     virtual cosmo::util::ErrorEnum AddAtomicModel(
         const std::string& modelCode, const std::string& modelName, const std::string& modelType,
-        const std::string& description, const std::vector<cosmo::Model::BmodelFileInfo>& bmodelFiles,
+        const std::string& description, const std::vector<cosmo::Model::ModelArtifactInfo>& modelFiles,
         const std::string& vocabFilePath, const std::string& tokenizerFilePath,
         const std::string& characterTableFilePath, const std::string& normalizationMode,
         const std::string& colorChannel) = 0;

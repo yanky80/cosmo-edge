@@ -132,14 +132,14 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
         outTok << "{}";
         outTok.close();
 
-        std::vector<cosmo::Model::BmodelFileInfo> bmodelFiles;
-        cosmo::Model::BmodelFileInfo info;
+        std::vector<cosmo::Model::ModelArtifactInfo> modelFiles;
+        cosmo::Model::ModelArtifactInfo info;
         info.filePath = bmodelSrc;
         info.role     = "BM1684X";
-        bmodelFiles.push_back(info);
+        modelFiles.push_back(info);
 
         auto res = importExporter.AddAtomicModel("new_atomic_model", "AtomicName", "qwen3vl", "desc",
-                                                 bmodelFiles, "", tokenizerSrc, "", "", "");
+                                                 modelFiles, "", tokenizerSrc, "", "", "");
         REQUIRE(res == cosmo::util::ErrorEnum::Success);
 
         std::string expectedDir =
@@ -162,24 +162,24 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
     SECTION("OCR character table is required, validated, and copied with a fixed name") {
         std::string bmodelSrc = testUploadDir + "/ocr_source.bmodel";
         std::ofstream(bmodelSrc).close();
-        std::vector<cosmo::Model::BmodelFileInfo> bmodelFiles = {{"main", bmodelSrc}};
+        std::vector<cosmo::Model::ModelArtifactInfo> modelFiles = {{"main", bmodelSrc}};
         std::string resolvedCode;
-        std::vector<std::string> bmodelPaths;
+        std::vector<std::string> modelArtifactPaths;
 
-        auto result = importExporter.ValidateAddModelInputs("", "OcrModel", "ocr", bmodelFiles, "", "", "",
-                                                            resolvedCode, bmodelPaths);
+        auto result = importExporter.ValidateAddModelInputs("", "OcrModel", "ocr", modelFiles, "", "", "",
+                                                            resolvedCode, modelArtifactPaths);
         REQUIRE(result == cosmo::util::ErrorEnum::InvalidParam);
 
         std::string invalidTable = testUploadDir + "/character_table.json";
         std::ofstream(invalidTable) << "[]";
-        result = importExporter.ValidateAddModelInputs("", "OcrModel", "ocr", bmodelFiles, "", "",
-                                                       invalidTable, resolvedCode, bmodelPaths);
+        result = importExporter.ValidateAddModelInputs("", "OcrModel", "ocr", modelFiles, "", "",
+                                                       invalidTable, resolvedCode, modelArtifactPaths);
         REQUIRE(result == cosmo::util::ErrorEnum::InvalidParam);
 
         std::string characterTable = testUploadDir + "/character_table.txt";
         std::ofstream(characterTable) << "blank\n京\n";
-        result = importExporter.ValidateAddModelInputs("", "OcrModel", "ocr", bmodelFiles, "", "",
-                                                       characterTable, resolvedCode, bmodelPaths);
+        result = importExporter.ValidateAddModelInputs("", "OcrModel", "ocr", modelFiles, "", "",
+                                                       characterTable, resolvedCode, modelArtifactPaths);
         REQUIRE(result == cosmo::util::ErrorEnum::Success);
 
         std::string modelDir = testModelDir + "/ocr_copy_target";
@@ -680,7 +680,7 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
     SECTION("managed upload boundary never deletes an external model component") {
         const std::string outsideFile = testRoot + "/outside.bmodel";
         std::ofstream(outsideFile) << "must survive";
-        std::vector<cosmo::Model::BmodelFileInfo> files = {{"main", outsideFile}};
+        std::vector<cosmo::Model::ModelArtifactInfo> files = {{"main", outsideFile}};
 
         auto result = importExporter.AddAtomicModel("", "OutsideModel", "DET", "", files, "", "", "", "", "");
         REQUIRE(result == cosmo::util::ErrorEnum::FileNotExist);

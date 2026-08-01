@@ -7,11 +7,11 @@ if(COSMO_TARGET_ARCH STREQUAL "aarch64")
     set(SRS_PATCH_COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/cmake/patch_srs_crossbuild.sh <SOURCE_DIR>)
     set(SRS_CONFIGURE_ARCH_ARGS
         --cross=on
-        --cc=${CMAKE_C_COMPILER}
-        --cxx=${CMAKE_CXX_COMPILER}
-        --ar=aarch64-linux-gnu-ar
-        --ld=aarch64-linux-gnu-ld
-        --randlib=aarch64-linux-gnu-ranlib
+        --cc=${COSMO_EXTERNAL_PROJECT_CC}
+        --cxx=${COSMO_EXTERNAL_PROJECT_CXX}
+        --ar=${COSMO_EXTERNAL_PROJECT_AR}
+        --ld=${COSMO_EXTERNAL_PROJECT_LD}
+        --randlib=${COSMO_EXTERNAL_PROJECT_RANLIB}
         --arch=aarch64
         --host=aarch64-linux-gnu
         --cross-prefix=aarch64-linux-gnu-

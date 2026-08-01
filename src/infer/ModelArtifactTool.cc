@@ -1,6 +1,6 @@
-// BmodelTool — BmodelTool — Utility for retrieving bmodel info and converting to nn format.
+// ModelArtifactTool — Utility for inspecting backend model artifacts and installing nn payloads.
 
-#include "infer/BmodelTool.h"
+#include "infer/ModelArtifactTool.h"
 
 #include <algorithm>
 #include <array>
@@ -30,7 +30,7 @@ namespace fs = std::filesystem;
 
 namespace cosmo {
 
-int BmodelTool::ConvertDataType(int bmDataType) {
+int ModelArtifactTool::ConvertDataType(int bmDataType) {
     switch (bmDataType) {
         case 0:
             return 0;  // BM_FLOAT32 -> 0
@@ -59,7 +59,7 @@ static std::string ShapeToString(const std::vector<int>& shape) {
     return oss.str();
 }
 
-void BmodelTool::LogBmodelInfo(const BmodelInfo& info, const std::string& logPrefix) {
+void ModelArtifactTool::LogModelArtifactInfo(const BmodelInfo& info, const std::string& logPrefix) {
     LOG_INFO("{} filePath={} valid={}", logPrefix, info.file_path, info.valid);
     if (!info.valid) {
         if (!info.error_msg.empty())
@@ -83,14 +83,14 @@ void BmodelTool::LogBmodelInfo(const BmodelInfo& info, const std::string& logPre
 }
 
 #ifdef COSMO_NN_USE_SOPHON_BACKEND
-BmodelInfo BmodelTool::GetBmodelInfo(const std::string& bmodelPath) {
+BmodelInfo ModelArtifactTool::GetModelArtifactInfo(const std::string& bmodelPath) {
     BmodelInfo info;
     info.file_path = bmodelPath;
 
     if (!fs::exists(bmodelPath)) {
         info.valid     = false;
         info.error_msg = "File does not exist: " + bmodelPath;
-        LOG_WARN("[BmodelTool] {}", info.error_msg);
+        LOG_WARN("[ModelArtifactTool] {}", info.error_msg);
         return info;
     }
 
@@ -99,7 +99,7 @@ BmodelInfo BmodelTool::GetBmodelInfo(const std::string& bmodelPath) {
     if (ret != BM_SUCCESS) {
         info.valid     = false;
         info.error_msg = "Cannot request device (device may not exist or is in use)";
-        LOG_WARN("[BmodelTool] {}", info.error_msg);
+        LOG_WARN("[ModelArtifactTool] {}", info.error_msg);
         return info;
     }
 
@@ -108,7 +108,7 @@ BmodelInfo BmodelTool::GetBmodelInfo(const std::string& bmodelPath) {
         bm_dev_free(handle);
         info.valid     = false;
         info.error_msg = "Cannot create BMRT context";
-        LOG_WARN("[BmodelTool] {}", info.error_msg);
+        LOG_WARN("[ModelArtifactTool] {}", info.error_msg);
         return info;
     }
 
@@ -117,8 +117,8 @@ BmodelInfo BmodelTool::GetBmodelInfo(const std::string& bmodelPath) {
         bmrt_destroy(context);
         bm_dev_free(handle);
         info.valid     = false;
-        info.error_msg = "Cannot load bmodel file: " + bmodelPath;
-        LOG_WARN("[BmodelTool] {}", info.error_msg);
+        info.error_msg = "Cannot load model artifact: " + bmodelPath;
+        LOG_WARN("[ModelArtifactTool] {}", info.error_msg);
         return info;
     }
 
@@ -184,8 +184,8 @@ BmodelInfo BmodelTool::GetBmodelInfo(const std::string& bmodelPath) {
     bm_dev_free(handle);
 
     info.valid = true;
-    LOG_INFO("[BmodelTool] Successfully got bmodel info: {} networks", info.networks.size());
-    LogBmodelInfo(info, "[BmodelTool]");
+    LOG_INFO("[ModelArtifactTool] Successfully inspected model artifact: {} networks", info.networks.size());
+    LogModelArtifactInfo(info, "[ModelArtifactTool]");
 
     return info;
 }
@@ -208,19 +208,19 @@ static int ConvertOnnxDataType(ONNXTensorElementDataType onnxType) {
     }
 }
 
-BmodelInfo BmodelTool::GetBmodelInfo(const std::string& bmodelPath) {
+BmodelInfo ModelArtifactTool::GetModelArtifactInfo(const std::string& bmodelPath) {
     BmodelInfo info;
     info.file_path = bmodelPath;
 
     if (!fs::exists(bmodelPath)) {
         info.valid     = false;
         info.error_msg = "File does not exist: " + bmodelPath;
-        LOG_WARN("[BmodelTool] {}", info.error_msg);
+        LOG_WARN("[ModelArtifactTool] {}", info.error_msg);
         return info;
     }
 
     try {
-        Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "BmodelTool");
+        Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "ModelArtifactTool");
         Ort::SessionOptions opts;
         opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_DISABLE_ALL);
 
@@ -275,48 +275,48 @@ BmodelInfo BmodelTool::GetBmodelInfo(const std::string& bmodelPath) {
 
         info.networks.push_back(network);
         info.valid = true;
-        LOG_INFO("[BmodelTool] Successfully got ONNX model info: {} inputs, {} outputs",
+        LOG_INFO("[ModelArtifactTool] Successfully inspected ONNX model artifact: {} inputs, {} outputs",
                  network.inputs.size(), network.outputs.size());
-        LogBmodelInfo(info, "[BmodelTool]");
+        LogModelArtifactInfo(info, "[ModelArtifactTool]");
 
     } catch (const Ort::Exception& e) {
         info.valid     = false;
         info.error_msg = std::string("Failed to read ONNX model: ") + e.what();
-        LOG_WARN("[BmodelTool] {}", info.error_msg);
+        LOG_WARN("[ModelArtifactTool] {}", info.error_msg);
     } catch (const std::exception& e) {
         info.valid     = false;
         info.error_msg = std::string("Failed to read ONNX model: ") + e.what();
-        LOG_WARN("[BmodelTool] {}", info.error_msg);
+        LOG_WARN("[ModelArtifactTool] {}", info.error_msg);
     }
 
     return info;
 }
 
 #else
-BmodelInfo BmodelTool::GetBmodelInfo(const std::string& bmodelPath) {
+BmodelInfo ModelArtifactTool::GetModelArtifactInfo(const std::string& bmodelPath) {
     BmodelInfo info;
     info.file_path = bmodelPath;
     info.valid     = false;
     info.error_msg = "SDK_NOT_AVAILABLE";
-    LOG_INFO("{}", "[BmodelTool] No inference backend enabled, returning SDK_NOT_AVAILABLE");
+    LOG_INFO("{}", "[ModelArtifactTool] No inference backend enabled, returning SDK_NOT_AVAILABLE");
     return info;
 }
 #endif  // COSMO_NN_USE_SOPHON_BACKEND / COSMO_NN_USE_ONNX_BACKEND
 
-std::string BmodelTool::ConvertToNn(const std::vector<std::string>& bmodelPaths,
-                                    const std::string& outputPath) {
+std::string ModelArtifactTool::InstallModelArtifacts(const std::vector<std::string>& bmodelPaths,
+                                                     const std::string& outputPath) {
     if (bmodelPaths.empty()) {
-        return "No bmodel files provided";
+        return "No model artifacts provided";
     }
     if (bmodelPaths.size() > cosmo::nn::kPlainNnMaxModelCount) {
-        return "Too many bmodel files for nn container";
+        return "Too many model artifacts for nn container";
     }
 
     std::vector<uint64_t> fileSizes;
     for (const auto& path : bmodelPaths) {
         std::error_code equivalentError;
         if (fs::equivalent(outputPath, path, equivalentError)) {
-            return "Output nn file must be different from input bmodel file: " + path;
+            return "Output nn file must be different from input model artifact: " + path;
         }
         std::error_code ec;
         auto size = fs::file_size(path, ec);
@@ -330,7 +330,7 @@ std::string BmodelTool::ConvertToNn(const std::vector<std::string>& bmodelPaths,
             return "Bmodel file is too large: " + path;
         }
         fileSizes.push_back(static_cast<uint64_t>(size));
-        LOG_INFO("[BmodelTool] bmodel file: {}, size: {} bytes", path, size);
+        LOG_INFO("[ModelArtifactTool] model artifact: {}, size: {} bytes", path, size);
     }
 
     auto headerResult = cosmo::nn::BuildPlainNnHeader(fileSizes);
@@ -357,7 +357,7 @@ std::string BmodelTool::ConvertToNn(const std::vector<std::string>& bmodelPaths,
         if (inputFile.fail()) {
             outputFile.close();
             fs::remove(outputPath);
-            return "Cannot open bmodel file: " + bmodelPath;
+            return "Cannot open model artifact: " + bmodelPath;
         }
 
         uint64_t remaining = fileSizes[idx];
@@ -367,7 +367,7 @@ std::string BmodelTool::ConvertToNn(const std::vector<std::string>& bmodelPaths,
             if (!inputFile.read(copyBuf.data(), n)) {
                 outputFile.close();
                 fs::remove(outputPath);
-                return "Failed to read bmodel file: " + bmodelPath;
+                return "Failed to read model artifact: " + bmodelPath;
             }
             outputFile.write(copyBuf.data(), n);
             if (outputFile.fail()) {
@@ -406,19 +406,20 @@ std::string BmodelTool::ConvertToNn(const std::vector<std::string>& bmodelPaths,
         return "nn file size is incorrect";
     }
 
-    LOG_INFO("[BmodelTool] Successfully converted to nn: {}, size: {} bytes", outputPath, outputSize);
+    LOG_INFO("[ModelArtifactTool] Successfully installed model artifacts to nn: {}, size: {} bytes", outputPath,
+             outputSize);
     return "";
 }
 
-void BmodelTool::CleanupTempFiles(const std::vector<std::string>& filePaths) {
+void ModelArtifactTool::CleanupTempFiles(const std::vector<std::string>& filePaths) {
     for (const auto& path : filePaths) {
         try {
             if (fs::exists(path)) {
                 fs::remove(path);
-                LOG_INFO("[BmodelTool] Cleaned up temp file: {}", path);
+                LOG_INFO("[ModelArtifactTool] Cleaned up temp file: {}", path);
             }
         } catch (const std::exception& e) {
-            LOG_WARN("[BmodelTool] Failed to cleanup temp file {}: {}", path, e.what());
+            LOG_WARN("[ModelArtifactTool] Failed to cleanup temp file {}: {}", path, e.what());
         }
     }
 }

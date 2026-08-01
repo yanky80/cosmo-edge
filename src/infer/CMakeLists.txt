@@ -13,7 +13,7 @@ add_library(cosmo_infer OBJECT
     AiRecognizerUnify.cc            AiRecognizerUnify.h
     AiTrackerUnify.cc               AiTrackerUnify.h
     AiVideoQualityUnify.cc          AiVideoQualityUnify.h
-    BmodelTool.cc                   BmodelTool.h
+    ModelArtifactTool.cc            ModelArtifactTool.h
     DinoDetectorUnify.cc            DinoDetectorUnify.h
     InferPoolTypes.h
     Qwen3VLUnify.cc                 Qwen3VLUnify.h
@@ -27,7 +27,7 @@ target_include_directories(cosmo_infer PRIVATE
 
 target_link_libraries(cosmo_infer PRIVATE cosmo_common)
 
-# Backend configure (libraries and definitions used by AiComponment.cc and BmodelTool.cc)
+# Backend configure (libraries and definitions used by AiComponment.cc and ModelArtifactTool.cc)
 if(COSMO_NN_USE_SOPHON_BACKEND)
     target_link_libraries(cosmo_infer PRIVATE bmlib bmcv)
     target_compile_definitions(cosmo_infer PRIVATE COSMO_NN_USE_SOPHON_BACKEND)

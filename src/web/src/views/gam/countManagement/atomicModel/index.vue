@@ -1375,7 +1375,7 @@ const sureAddModel = async () => {
         addModelForm.decoderFileList[0].raw || addModelForm.decoderFileList[0]
       const encoderUploadId = await stageForAdd(encoderFile)
       const decoderUploadId = await stageForAdd(decoderFile)
-      addModelParams.bmodelFiles = [
+      addModelParams.modelFiles = [
         { role: 'encoder', uploadId: encoderUploadId },
         { role: 'decoder', uploadId: decoderUploadId }
       ]
@@ -1383,7 +1383,7 @@ const sureAddModel = async () => {
       const file =
         addModelForm.modelFileList[0].raw || addModelForm.modelFileList[0]
       const uploadId = await stageForAdd(file)
-      addModelParams.bmodelFiles = [{ role: 'main', uploadId }]
+      addModelParams.modelFiles = [{ role: 'main', uploadId }]
     }
     if (addModelForm.modelType === 'dino') {
       if (

@@ -50,7 +50,8 @@ public:
     MAKE_MOCK1(ImportModel, cosmo::util::ErrorEnum(const std::string&), override);
     MAKE_MOCK10(AddAtomicModel,
                 cosmo::util::ErrorEnum(const std::string&, const std::string&, const std::string&,
-                                       const std::string&, const std::vector<cosmo::Model::BmodelFileInfo>&,
+                                       const std::string&,
+                                       const std::vector<cosmo::Model::ModelArtifactInfo>&,
                                        const std::string&, const std::string&, const std::string&,
                                        const std::string&, const std::string&),
                 override);
