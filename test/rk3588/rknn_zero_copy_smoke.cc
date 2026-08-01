@@ -66,6 +66,11 @@ void Require(bool condition, const std::string& message) {
     }
 }
 
+void RequireStatus(cosmo::nn::Status status, const std::string& message) {
+    if (!bool(status))
+        throw std::runtime_error(message + ": " + status.description());
+}
+
 std::string AvError(int code) {
     std::array<char, AV_ERROR_MAX_STRING_SIZE> text{};
     av_strerror(code, text.data(), text.size());
@@ -276,16 +281,16 @@ public:
     ZeroCopyInference(const Options& options) : options_(options) {
         const std::string model_data = ReadFile(options_.model);
         net_.SetModelPath(options_.model);
-        Require(bool(net_.LoadWeight(model_data.data(), model_data.size())),
-                "RknnNetNode::LoadWeight failed");
-        Require(bool(net_.InferTopShapes()), "RknnNetNode::InferTopShapes failed");
+        RequireStatus(net_.LoadWeight(model_data.data(), model_data.size()),
+                      "RknnNetNode::LoadWeight failed");
+        RequireStatus(net_.InferTopShapes(), "RknnNetNode::InferTopShapes failed");
 
         auto op         = std::make_unique<cosmo::nn::ImageToTensor>("image_to_tensor");
         op->input_width = options_.image_size;
         op->input_height = options_.image_size;
         op->padding_color = {114, 114, 114};
         pre_.LoadParam(op.get());
-        Require(bool(pre_.InferTopShapes()), "RknnImageToTensorNode::InferTopShapes failed");
+        RequireStatus(pre_.InferTopShapes(), "RknnImageToTensorNode::InferTopShapes failed");
 
         // Shared network input blob: created by the graph as the preprocess top,
         // then bound by RknnNetNode::BindInputBlobs to the RKNN tensor memory.
@@ -296,7 +301,7 @@ public:
         shared_desc.dims        = {1, options_.image_size, options_.image_size, 3};
         shared_blob_            = std::make_shared<cosmo::nn::Blob>(shared_desc);
         std::vector<std::shared_ptr<cosmo::nn::Blob>> bottoms{shared_blob_};
-        Require(bool(net_.BindInputBlobs(bottoms)), "RknnNetNode::BindInputBlobs failed");
+        RequireStatus(net_.BindInputBlobs(bottoms), "RknnNetNode::BindInputBlobs failed");
 
         const auto& shapes = net_.GetTopBlobShapes();
         Require(shapes.size() == 6, "RKNN model must expose six outputs");
@@ -325,7 +330,7 @@ public:
             post_op.output_zero_points.push_back(desc.affine_zero_point);
         }
         decode_.LoadParam(&post_op);
-        Require(bool(decode_.InferTopShapes()), "Yolo26RawDecodeNode::InferTopShapes failed");
+        RequireStatus(decode_.InferTopShapes(), "Yolo26RawDecodeNode::InferTopShapes failed");
 
         cosmo::nn::BlobDesc det_desc;
         det_desc.device_type = cosmo::nn::DEVICE_NAIVE;
@@ -347,14 +352,14 @@ public:
 
         std::vector<std::shared_ptr<cosmo::nn::Blob>> input_blobs{input_blob};
         std::vector<std::shared_ptr<cosmo::nn::Blob>> pre_tops{shared_blob_};
-        Require(bool(pre_.Forward(input_blobs, pre_tops)), "RknnImageToTensorNode::Forward failed");
+        RequireStatus(pre_.Forward(input_blobs, pre_tops), "RknnImageToTensorNode::Forward failed");
         const auto& letterbox = pre_.GetLastLetterbox();
 
         std::vector<std::shared_ptr<cosmo::nn::Blob>> net_bottoms{shared_blob_};
-        Require(bool(net_.Forward(net_bottoms, top_blobs_)), "RknnNetNode::Forward failed");
+        RequireStatus(net_.Forward(net_bottoms, top_blobs_), "RknnNetNode::Forward failed");
 
         std::vector<std::shared_ptr<cosmo::nn::Blob>> det_tops{det_blob_};
-        Require(bool(decode_.Forward(top_blobs_, det_tops)), "Yolo26RawDecodeNode::Forward failed");
+        RequireStatus(decode_.Forward(top_blobs_, det_tops), "Yolo26RawDecodeNode::Forward failed");
 
         std::vector<Detection> detections;
         const auto* data = static_cast<const float*>(det_blob_->GetHandle().base);
