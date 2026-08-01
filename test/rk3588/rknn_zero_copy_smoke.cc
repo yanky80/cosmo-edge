@@ -376,8 +376,9 @@ private:
         for (int row = 0; row < height_; ++row) {
             for (int col = 0; col < width_; ++col) {
                 const int yy = y[row * y_pitch + static_cast<size_t>(col)] - 16;
-                const int u = uv[(row / 2) * uv_pitch + static_cast<size_t>(col)] - 128;
-                const int v = uv[(row / 2) * uv_pitch + static_cast<size_t>(col) + 1] - 128;
+                const size_t uv_col = static_cast<size_t>(col & ~1);
+                const int u = uv[(row / 2) * uv_pitch + uv_col] - 128;
+                const int v = uv[(row / 2) * uv_pitch + uv_col + 1] - 128;
                 auto clamp8 = [](int value) -> uint8_t {
                     return static_cast<uint8_t>(value < 0 ? 0 : (value > 255 ? 255 : value));
                 };
@@ -700,8 +701,10 @@ int main(int argc, char** argv) {
 
         AVFramePtr frame;
         int frame_index = 0;
+        int last_surface_fd = -1;
         while (frame_index < options.max_frames && decoder.Next(frame)) {
             const auto surface = BuildSurface(*frame);
+            last_surface_fd = surface.planes[0].fd;
             const std::vector<Detection> first = inference.Run(surface, frame->width, frame->height);
             const std::vector<Detection> second = inference.Run(surface, frame->width, frame->height);
             auto describe = [](const std::vector<Detection>& detections) {
@@ -753,7 +756,10 @@ int main(int argc, char** argv) {
         // differ from the MPP source fd (source never moves to host memory).
         Require(inference.RgaStats().last_dst_fd == inference.TensorFd(),
                 "RGA destination fd is not the RKNN tensor fd");
-        Require(inference.RgaStats().last_src_fd > 0, "RGA source fd is invalid");
+        Require(inference.RgaStats().last_src_fd == last_surface_fd,
+                "RGA source fd is not the supplied DRM surface fd");
+        Require(inference.RgaStats().last_src_fd != inference.RgaStats().last_dst_fd,
+                "RGA source and RKNN destination unexpectedly share an fd");
         std::cout << "fd provenance: RGA src_fd=" << inference.RgaStats().last_src_fd
                   << " -> RKNN tensor dst_fd=" << inference.RgaStats().last_dst_fd << "\n";
 

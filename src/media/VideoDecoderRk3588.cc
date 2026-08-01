@@ -141,7 +141,7 @@ bool BuildRkDrmPrimeSurface(const AVFrame& frame, FrameSurface& surface, std::st
         frame_plane.offset          = static_cast<size_t>(plane.offset);
         frame_plane.pitch           = static_cast<size_t>(plane.pitch);
         frame_plane.vertical_stride = PlaneVerticalStrideFromDescriptor(object, layer, plane_index);
-        frame_plane.size            = PlaneSizeFromDescriptor(object, layer, plane_index);
+        frame_plane.size            = object.size;
         if (frame_plane.vertical_stride == 0 || frame_plane.size == 0 || !frame_plane.IsValid(surface.memory_type)) {
             error = "DRM PRIME plane size metadata is invalid";
             surface.planes.clear();

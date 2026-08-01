@@ -30,6 +30,28 @@ cosmo::nn::ImageFormat GetImageFormatType() {
     return cosmo::nn::ImageFormat::IMAGE_BGR;
 }
 
+#ifdef COSMO_NN_USE_RKNN_BACKEND
+namespace {
+
+std::shared_ptr<cosmo::nn::Blob> MakeRknnSurfaceBlob(const VideoFramePtr& image) {
+    auto surface = image->GetSurface();
+    if (!surface || surface->memory_type != media::FrameSurfaceMemoryType::DmaBuf)
+        return nullptr;
+
+    cosmo::nn::BlobDesc desc;
+    desc.data_format = GetDataFormatType();
+    desc.data_type   = cosmo::nn::DataType::DATA_TYPE_UINT8;
+    desc.dims        = {1, static_cast<int>(image->GetHeight()), static_cast<int>(image->GetWidth()), 3};
+    desc.device_type = GetDeviceType();
+    cosmo::nn::BlobHandle handle;
+    handle.base      = surface.get();
+    handle.ownership = cosmo::nn::BLOB_HANDLE_EXTERNAL_OWNED;
+    return std::make_shared<cosmo::nn::Blob>(desc, handle);
+}
+
+}  // namespace
+#endif
+
 util::ErrorEnum ConvertImagesToBlobs(const std::vector<VideoFramePtr>& images,
                                      std::vector<std::shared_ptr<cosmo::nn::Blob>>& blobs) {
     if (images.empty()) {
@@ -46,20 +68,7 @@ util::ErrorEnum ConvertImagesToBlobs(const std::vector<VideoFramePtr>& images,
         // Zero-copy RK3588 path: pass the DMA-BUF surface through without any
         // host copy. RknnImageToTensorNode reads the FrameSurface pointer from
         // the blob handle and RGA converts it straight into the RKNN tensor.
-        if (auto surface = image->GetSurface(); surface && surface->memory_type ==
-                                                             media::FrameSurfaceMemoryType::DmaBuf) {
-            cosmo::nn::BlobDesc desc;
-            desc.data_format  = GetDataFormatType();
-            desc.data_type    = cosmo::nn::DataType::DATA_TYPE_UINT8;
-            desc.dims         = {1, static_cast<int>(image->GetHeight()),
-                                 static_cast<int>(image->GetWidth()), 3};
-            desc.device_type  = GetDeviceType();
-            cosmo::nn::BlobHandle handle;
-            handle.base      = surface.get();
-            handle.ownership = cosmo::nn::BLOB_HANDLE_EXTERNAL_OWNED;
-            auto blob        = std::make_shared<cosmo::nn::Blob>(desc);
-            blob->SetBlobDesc(desc);
-            blob->SetHandle(handle);
+        if (auto blob = MakeRknnSurfaceBlob(image)) {
             blobs.push_back(blob);
             continue;
         }
@@ -147,22 +156,8 @@ std::shared_ptr<cosmo::nn::Blob> ConvertImageToBlob(VideoFramePtr image) {
     }
 
 #ifdef COSMO_NN_USE_RKNN_BACKEND
-    if (auto surface = image->GetSurface(); surface && surface->memory_type ==
-                                                         media::FrameSurfaceMemoryType::DmaBuf) {
-        cosmo::nn::BlobDesc desc;
-        desc.data_format = GetDataFormatType();
-        desc.data_type   = cosmo::nn::DataType::DATA_TYPE_UINT8;
-        desc.dims        = {1, static_cast<int>(image->GetHeight()),
-                            static_cast<int>(image->GetWidth()), 3};
-        desc.device_type = GetDeviceType();
-        cosmo::nn::BlobHandle handle;
-        handle.base      = surface.get();
-        handle.ownership = cosmo::nn::BLOB_HANDLE_EXTERNAL_OWNED;
-        auto blob        = std::make_shared<cosmo::nn::Blob>(desc);
-        blob->SetBlobDesc(desc);
-        blob->SetHandle(handle);
+    if (auto blob = MakeRknnSurfaceBlob(image))
         return blob;
-    }
 #endif
 
 #ifdef COSMO_NN_USE_HOST_BACKEND

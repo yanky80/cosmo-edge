@@ -40,6 +40,15 @@ std::string AttrToString(const rknn_tensor_attr& attr) {
            " w_stride=" + std::to_string(attr.w_stride) + " h_stride=" + std::to_string(attr.h_stride);
 }
 
+std::string AttrsToString(const std::vector<rknn_tensor_attr>& attrs) {
+    std::string text;
+    for (const auto& attr : attrs) {
+        text += text.empty() ? "outputs={" : "; ";
+        text += AttrToString(attr);
+    }
+    return text + "}";
+}
+
 }  // namespace
 
 RknnNetNode::RknnNetNode() : NetNode() {
@@ -261,7 +270,8 @@ Status RknnNetNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_blobs,
     const int get_ret =
         rknn_outputs_get(context_, static_cast<uint32_t>(outputs.size()), outputs.data(), nullptr);
     if (get_ret != RKNN_SUCC)
-        return MakeRknnStatus(COSMO_NN_ERR_RKNN_OUTPUT, "rknn_outputs_get failed", GetModelPath(), "", get_ret);
+        return MakeRknnStatus(COSMO_NN_ERR_RKNN_OUTPUT, "rknn_outputs_get failed", GetModelPath(),
+                              AttrsToString(output_attrs_), get_ret);
 
     for (size_t i = 0; i < outputs.size(); ++i) {
         auto& top_blob = top_blobs[i];
@@ -282,8 +292,8 @@ Status RknnNetNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_blobs,
     const int release_ret =
         rknn_outputs_release(context_, static_cast<uint32_t>(outputs.size()), outputs.data());
     if (release_ret != RKNN_SUCC)
-        return MakeRknnStatus(COSMO_NN_ERR_RKNN_RELEASE, "rknn_outputs_release failed", GetModelPath(), "",
-                              release_ret);
+        return MakeRknnStatus(COSMO_NN_ERR_RKNN_RELEASE, "rknn_outputs_release failed", GetModelPath(),
+                              AttrsToString(output_attrs_), release_ret);
 
     timer.Stop();
     return COSMO_NN_OK;

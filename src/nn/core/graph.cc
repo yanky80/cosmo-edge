@@ -804,7 +804,7 @@ Status Graph::LoadWeight(const std::string& model_path) {
 
     std::unique_ptr<char[]> model_data;
     try {
-        model_data.reset(new char[static_cast<size_t>(model_size)]);
+        model_data = std::make_unique<char[]>(static_cast<size_t>(model_size));
     } catch (const std::bad_alloc&) {
         return Status(COSMO_NN_ERR_OUT_OF_MEMORY, "not enough memory to load RKNN model");
     }

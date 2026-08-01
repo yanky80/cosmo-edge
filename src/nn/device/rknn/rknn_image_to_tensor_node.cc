@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -92,6 +93,9 @@ Status RknnImageToTensorNode::ValidateSurface(const media::FrameSurface& surface
     if (luma.fd != chroma.fd || luma.fd < 0)
         return Status(COSMO_NN_ERR_RKNN_SURFACE, "NV12 planes must share one DMA-BUF fd " +
                                                      SurfaceToString(surface));
+    if (luma.size != chroma.size || luma.size > static_cast<size_t>(std::numeric_limits<int>::max()))
+        return Status(COSMO_NN_ERR_RKNN_SURFACE, "NV12 planes must share one importable DMA-BUF allocation " +
+                                                     SurfaceToString(surface));
     if (luma.offset != 0)
         return Status(COSMO_NN_ERR_RKNN_SURFACE,
                       "NV12 luma offset must be zero for RGA import " + SurfaceToString(surface));
@@ -106,6 +110,10 @@ Status RknnImageToTensorNode::ValidateSurface(const media::FrameSurface& surface
                                                      SurfaceToString(surface));
     if (chroma.vertical_stride * 2 != luma.vertical_stride)
         return Status(COSMO_NN_ERR_RKNN_SURFACE, "NV12 chroma vertical stride must be half the luma stride " +
+                                                     SurfaceToString(surface));
+    if (luma.vertical_stride > (luma.size - luma.offset) / luma.pitch ||
+        chroma.vertical_stride > (chroma.size - chroma.offset) / chroma.pitch)
+        return Status(COSMO_NN_ERR_RKNN_SURFACE, "NV12 plane extent exceeds the DMA-BUF allocation " +
                                                      SurfaceToString(surface));
     return COSMO_NN_OK;
 }
@@ -131,12 +139,18 @@ Status RknnImageToTensorNode::RunRga(const media::FrameSurface& surface, int fra
     const auto& luma     = surface.planes[0];
 
     // Destination: the RKNN input tensor DMA buffer (zero-copy, no host RGB).
+    if (binding.memory->size > static_cast<uint32_t>(std::numeric_limits<int>::max()))
+        return Status(COSMO_NN_ERR_RKNN_RGA, "RKNN tensor is too large for RGA import model=" +
+                                                 binding.model_path + " fd=" +
+                                                 std::to_string(binding.memory->fd) + " size=" +
+                                                 std::to_string(binding.memory->size));
     const rga_buffer_handle_t output_handle =
         importbuffer_fd(binding.memory->fd, static_cast<int>(binding.memory->size));
     if (output_handle == kRgaImportFailed) {
         return Status(COSMO_NN_ERR_RKNN_RGA, "RGA could not import RKNN tensor fd model=" + binding.model_path +
                                                  " fd=" + std::to_string(binding.memory->fd) +
-                                                 " size=" + std::to_string(binding.memory->size));
+                                                 " size=" + std::to_string(binding.memory->size) +
+                                                 " rga_handle=" + std::to_string(output_handle));
     }
     struct OutputGuard {
         rga_buffer_handle_t value;
@@ -150,7 +164,8 @@ Status RknnImageToTensorNode::RunRga(const media::FrameSurface& surface, int fra
     if (input_handle == kRgaImportFailed) {
         return Status(COSMO_NN_ERR_RKNN_RGA, "RGA could not import MPP DMA fd model=" + binding.model_path +
                                                  " fd=" + std::to_string(luma.fd) +
-                                                 " size=" + std::to_string(luma.size));
+                                                 " size=" + std::to_string(luma.size) +
+                                                 " rga_handle=" + std::to_string(input_handle));
     }
     struct InputGuard {
         rga_buffer_handle_t value;
@@ -180,6 +195,8 @@ Status RknnImageToTensorNode::RunRga(const media::FrameSurface& surface, int fra
         const int sync_ret = rknn_mem_sync(binding.context, binding.memory, RKNN_MEMORY_SYNC_TO_DEVICE);
         if (sync_ret != RKNN_SUCC) {
             return Status(COSMO_NN_ERR_RKNN_SYNC, "rknn_mem_sync failed model=" + binding.model_path +
+                                                      " fd=" + std::to_string(binding.memory->fd) +
+                                                      " size=" + std::to_string(binding.memory->size) +
                                                       " rknn_ret=" + std::to_string(sync_ret));
         }
         previous_rect_ = destination;
