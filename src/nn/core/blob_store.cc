@@ -98,6 +98,9 @@ Status BlobStore::FreeBlob(std::shared_ptr<Blob>& blob) {
     if (device_type == DEVICE_NAIVE) {
         status = host_device->Free(handle);
     } else if (device_type == calculate_device_type) {
+        if (calculate_device == nullptr)
+            return Status(COSMO_NN_ERR_DEVICE_NOT_SUPPORT,
+                          "no device backend registered for device type " + std::to_string(device_type));
         status = calculate_device->Free(handle);
     } else {
         return Status(COSMO_NN_ERR_INVALID_INPUT, "invalid device type");
@@ -133,6 +136,9 @@ Status BlobStore::AllocaBlob(std::shared_ptr<Blob>& blob) {
         BlobMemorySizeInfo size_info = host_device->Calculate(desc);
         RETURN_ON_FAIL(host_device->Allocate(&handle, size_info));
     } else if (device_type == calculate_device_type) {
+        if (calculate_device == nullptr)
+            return Status(COSMO_NN_ERR_DEVICE_NOT_SUPPORT,
+                          "no device backend registered for device type " + std::to_string(device_type));
         BlobMemorySizeInfo size_info = calculate_device->Calculate(desc);
         RETURN_ON_FAIL(calculate_device->Allocate(&handle, size_info));
     } else {

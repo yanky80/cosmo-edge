@@ -48,7 +48,10 @@ void RknnImageToTensorNode::LoadParam(Op* op) {
     input_width_  = image_to_tensor->input_width;
     input_height_ = image_to_tensor->input_height;
     if (!image_to_tensor->padding_color.empty())
-        padding_color_ = image_to_tensor->padding_color;
+        // The padding is initialized with a byte memset over the tensor buffer,
+        // so only the first channel value is representable; non-uniform colors
+        // are normalized here instead of silently mis-filling channels.
+        padding_color_ = {image_to_tensor->padding_color.front()};
 }
 
 Status RknnImageToTensorNode::InferTopShapes() {
