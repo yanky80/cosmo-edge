@@ -786,7 +786,10 @@ public:
         Require(server_pid_ >= 0, "fork failed");
         if (server_pid_ == 0) {
             setenv("MEDIAMTX_CONFIG_PATH", config_path.c_str(), 1);
-            execl("/home/YTHC/bin/mediamtx", "mediamtx", nullptr);
+            // The installed MediaMTX v1.19.3 takes the config as a positional
+            // argument; MEDIAMTX_CONFIG_PATH is ignored by that build, so pass
+            // the path explicitly to keep the smoke independent of CWD.
+            execl("/home/YTHC/bin/mediamtx", "mediamtx", config_path.c_str(), nullptr);
             _exit(127);
         }
         push_pid_ = fork();
