@@ -132,6 +132,17 @@ std::string Yolo26RawPost::Description() {
     return stream.str();
 }
 
+ImageToTensor::ImageToTensor(const std::string name_) : Op(name_) {}
+ImageToTensor::~ImageToTensor() {}
+std::string ImageToTensor::Description() {
+    std::stringstream stream;
+    stream << "name: " << this->name << ","
+           << "input_width: " << this->input_width << ","
+           << "input_height: " << this->input_height << ","
+           << "padding_color: " << VectorToString<int>(this->padding_color);
+    return stream.str();
+}
+
 AffineCrop::AffineCrop(const std::string name_) : Op(name_) {}
 AffineCrop::~AffineCrop() {}
 std::string AffineCrop::Description() {

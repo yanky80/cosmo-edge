@@ -53,6 +53,9 @@ namespace pipeline_utils {
                                                        const std::vector<float>& output_scales,
                                                        const std::vector<int>& output_zero_points);
 
+    std::unique_ptr<ImageToTensor> MakeImageToTensorOp(int input_width, int input_height,
+                                                       const std::vector<int>& padding_color);
+
     std::unique_ptr<DinoEncoder> MakeDinoEncoderOp(int dst_width, int dst_height, bool is_bgr,
                                                    const std::vector<float>& mean,
                                                    const std::vector<float>& std_dev);

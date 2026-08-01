@@ -354,6 +354,12 @@ endif()
 if(COSMO_NN_USE_CPU_BACKEND)
     list(APPEND COMMON_LIBS onnxruntime)
 endif()
+if(COSMO_NN_USE_RKNN_BACKEND)
+    list(APPEND COMMON_LIBS
+        "${COSMO_RK3588_RKNNRT_LIB}"
+        "${COSMO_RK3588_RGA_LIB}"
+        "${COSMO_RK3588_DRM_LIB}")
+endif()
 
 ##########################################################
 #Main Executable
@@ -380,6 +386,9 @@ if(COSMO_NN_USE_CPU_BACKEND)
         COSMO_NN_USE_CPU_BACKEND
         COSMO_NN_USE_HOST_BACKEND
         COSMO_NN_USE_ONNX_BACKEND)
+endif()
+if(COSMO_NN_USE_RKNN_BACKEND)
+    target_compile_definitions(${EXECUTABLE_NAME} PRIVATE COSMO_NN_USE_RKNN_BACKEND)
 endif()
 #Build order: OBJECT libs → third_build (explicit, see foreach above)
 target_link_libraries(${EXECUTABLE_NAME} PRIVATE ${COMMON_LIBS})
@@ -418,6 +427,17 @@ if(BUILD_TESTS)
             COSMO_NN_USE_CPU_BACKEND
             COSMO_NN_USE_HOST_BACKEND
             COSMO_NN_USE_ONNX_BACKEND)
+    endif()
+    if(COSMO_NN_USE_RKNN_BACKEND)
+        target_compile_definitions(cosmo-tests PRIVATE COSMO_NN_USE_RKNN_BACKEND)
+        target_include_directories(cosmo-tests PRIVATE
+            "${COSMO_RK3588_SDK_ROOT}/include"
+            "${COSMO_RK3588_SDK_ROOT}/include/rga"
+            "${COSMO_RK3588_SYSROOT}/usr/include/libdrm")
+        target_link_libraries(cosmo-tests PRIVATE
+            "${COSMO_RK3588_RKNNRT_LIB}"
+            "${COSMO_RK3588_RGA_LIB}"
+            "${COSMO_RK3588_DRM_LIB}")
     endif()
     target_link_libraries(cosmo-tests PRIVATE ${COMMON_LIBS})
     if(COSMO_ENABLE_COVERAGE)

@@ -87,9 +87,11 @@ TEST_CASE("RK3588 DRM PRIME surface extraction keeps NV12 plane metadata", "[rk3
     CHECK(surface.planes[0].offset == 0);
     CHECK(surface.planes[0].pitch == 128);
     CHECK(surface.planes[0].vertical_stride == 32);
+    CHECK(surface.planes[0].size == 6144);
     CHECK(surface.planes[1].offset == 4096);
     CHECK(surface.planes[1].pitch == 128);
     CHECK(surface.planes[1].vertical_stride == 16);
+    CHECK(surface.planes[1].size == 6144);
     av_frame_unref(&frame);
 }
 

@@ -371,6 +371,15 @@ namespace pipeline_utils {
         return op;
     }
 
+    std::unique_ptr<ImageToTensor> MakeImageToTensorOp(int input_width, int input_height,
+                                                       const std::vector<int>& padding_color) {
+        auto op              = std::make_unique<ImageToTensor>("image_to_tensor");
+        op->input_width      = input_width;
+        op->input_height     = input_height;
+        op->padding_color    = padding_color;
+        return op;
+    }
+
     std::unique_ptr<DinoEncoder> MakeDinoEncoderOp(int dst_width, int dst_height, bool is_bgr,
                                                    const std::vector<float>& mean,
                                                    const std::vector<float>& std_dev) {

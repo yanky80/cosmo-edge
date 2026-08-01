@@ -23,8 +23,11 @@ endforeach()
 set(_cosmo_rk_lib_search_dirs
     "${COSMO_RK3588_SDK_ROOT}/lib"
     "${COSMO_RK3588_SDK_ROOT}/lib64"
+    "${COSMO_RK3588_SYSROOT}/usr/local/lib"
+    "${COSMO_RK3588_SYSROOT}/usr/local/lib64"
     "${COSMO_RK3588_SYSROOT}/usr/lib"
     "${COSMO_RK3588_SYSROOT}/usr/lib64"
+    "${COSMO_RK3588_SYSROOT}/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}"
     "${COSMO_RK3588_SYSROOT}/lib"
     "${COSMO_RK3588_SYSROOT}/lib64"
 )
@@ -63,6 +66,9 @@ set(_cosmo_pkgconfig_dirs "")
 foreach(_cosmo_dir
         "${COSMO_RK3588_SYSROOT}/usr/lib/pkgconfig"
         "${COSMO_RK3588_SYSROOT}/usr/lib64/pkgconfig"
+        "${COSMO_RK3588_SYSROOT}/usr/local/lib/pkgconfig"
+        "${COSMO_RK3588_SYSROOT}/usr/local/lib64/pkgconfig"
+        "${COSMO_RK3588_SYSROOT}/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}/pkgconfig"
         "${COSMO_RK3588_SYSROOT}/usr/share/pkgconfig")
     if(EXISTS "${_cosmo_dir}")
         list(APPEND _cosmo_pkgconfig_dirs "${_cosmo_dir}")
@@ -70,7 +76,7 @@ foreach(_cosmo_dir
 endforeach()
 list(JOIN _cosmo_pkgconfig_dirs ":" _cosmo_pkgconfig_path)
 
-foreach(_cosmo_pkg in libdrm rockchip_mpp libavcodec libavformat libavutil)
+foreach(_cosmo_pkg libdrm rockchip_mpp libavcodec libavformat libavutil)
     execute_process(
         COMMAND "${CMAKE_COMMAND}" -E env
             "PKG_CONFIG_SYSROOT_DIR=${COSMO_RK3588_SYSROOT}"
