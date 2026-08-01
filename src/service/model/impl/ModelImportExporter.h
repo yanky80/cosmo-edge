@@ -3,6 +3,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,23 @@ namespace cosmo::service {
 
 class ModelImportExporter {
 public:
+    struct TensorMetadata {
+        std::string name;
+        std::vector<int> dims;
+        std::string format;
+        std::string type;
+        std::string quant_type;
+        int zero_point = 0;
+        float scale    = 0.0F;
+    };
+
+    struct RknnModelMetadata {
+        std::vector<TensorMetadata> inputs;
+        std::vector<TensorMetadata> outputs;
+    };
+
+    using RknnMetadataLoader = std::function<bool(const std::string&, RknnModelMetadata&, std::string&)>;
+
     ModelImportExporter() = default;
 
     ModelImportExporter(const ModelImportExporter&)            = delete;
@@ -82,12 +100,18 @@ private:
     cosmo::util::ErrorEnum ImportDirectoryArchive(const std::string& tempDir, const std::string& modelsDir,
                                                   int& importedCount);
 
+    bool ValidateImportedModelPackage(const std::string& modelDir, std::string& algCode, std::string& error);
+    bool ValidateModelPackageContract(const std::string& configPath, const std::string& modelDir,
+                                      std::string& error);
+    void SetRknnMetadataLoaderForTest(RknnMetadataLoader loader);
+
     std::function<std::string()> get_model_path_;
     std::function<std::string()> get_model_template_path_;
     std::function<std::string(const std::string&)> find_model_dir_;
     std::function<std::string()> generate_unique_model_code_;
     std::function<void(const nlohmann::json&)> validate_model_output_format_;
     std::function<void(const std::string&, const std::string&)> set_model_path_mapping_;
+    RknnMetadataLoader rknn_metadata_loader_;
 };
 
 }  // namespace cosmo::service
