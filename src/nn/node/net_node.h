@@ -39,6 +39,14 @@ public:
         output_to_cpu_ = v;
     }
 
+    void SetModelPath(std::string path) {
+        model_path_ = std::move(path);
+    }
+
+    const std::string& GetModelPath() const {
+        return model_path_;
+    }
+
     virtual DeviceType GetInputBlobDeviceType();
 
     virtual void UpdateTopBlobDesc(size_t index, BlobDesc& desc) const;
@@ -51,6 +59,9 @@ protected:
     // network actual input/output names
     std::vector<std::string> network_input_names{};
     std::vector<std::string> network_output_names{};
+
+    // Model file path used in backend error messages (set by Graph::LoadWeight).
+    std::string model_path_{};
 };
 
 }  // namespace cosmo::nn

@@ -312,7 +312,19 @@ Status Yolo26DetPipeline::Init(const PipelineConfig& config, const std::string& 
             input.name      = in_def.name;
             input.shape     = in_def.shape;
             input.data_type = in_def.data_type;
-            input.ops       = MakeDetPreprocess(p);
+            const std::string preprocess_mode =
+                pipeline_utils::ReadString(p, "preprocess_mode", std::string());
+            if (preprocess_mode == "image_to_tensor") {
+                // RK3588 zero-copy path: RGA converts the DRM PRIME NV12 surface
+                // directly into the RKNN input tensor memory (no host RGB buffer).
+                std::vector<int> input_size = pipeline_utils::ReadIntArray(p, "input_size", {640, 640}, 2);
+                std::vector<int> padding_color =
+                    pipeline_utils::ReadIntArray(p, "padding_color", {114, 114, 114}, 1);
+                input.ops.push_back(pipeline_utils::MakeImageToTensorOp(input_size.at(0), input_size.at(1),
+                                                                        padding_color));
+            } else {
+                input.ops = MakeDetPreprocess(p);
+            }
             model.input_node_infos.push_back(std::move(input));
         }
 
@@ -370,6 +382,18 @@ Status Yolo26DetPipeline::Init(const PipelineConfig& config, const std::string& 
 
     InitThresholdsAndLabels();
     InitNetInputSize();
+    if (!model_info_.models.empty() && !model_info_.models[0].input_node_infos.empty() &&
+        model_info_.models[0].input_node_infos[0].ops.size() == 1 &&
+        model_info_.models[0].input_node_infos[0].ops[0]->name == "image_to_tensor") {
+        // The RK3588 config declares the input as NHWC {1,H,W,3}, while
+        // InitNetInputSize assumes NCHW. Restore the declared input size so the
+        // centered-letterbox coordinate recovery maps detections back correctly.
+        const nlohmann::json p =
+            pipeline_utils::ParseJsonObject(config.models.front().params_json);
+        std::vector<int> input_size = pipeline_utils::ReadIntArray(p, "input_size", {640, 640}, 2);
+        if (input_size.size() >= 2)
+            net_input_size_ = Size(input_size.at(0), input_size.at(1));
+    }
     return InitGraph(model_path, device_type, device_id, profiler, tokenizer_path, use_skip);
 }
 

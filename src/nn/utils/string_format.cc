@@ -28,6 +28,8 @@ std::string DeviceTypeToString(DeviceType val) {
             return "NAIVE";
         case DEVICE_SOPHON_TPU:
             return "SOPHON_TPU";
+        case DEVICE_RKNN:
+            return "RKNN";
         default:
             return "UNKNOWN";
     }

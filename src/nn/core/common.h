@@ -27,6 +27,7 @@ typedef enum {
     DEVICE_NAIVE      = 0x0000,
     DEVICE_SOPHON_TPU = 0x0007,
     DEVICE_CPU        = 0x0010,
+    DEVICE_RKNN       = 0x0008,
 } DeviceType;
 
 // Centralizes the graph's memory-boundary decision. New backends that consume

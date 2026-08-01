@@ -788,6 +788,38 @@ Status Graph::LoadWeight(const std::string& model_path) {
     }
 
     return COSMO_NN_OK;
+#elif defined(COSMO_NN_USE_RKNN_BACKEND)
+    // RKNN: the graph holds one raw .rknn model file (no .nn container header).
+    stream.close();
+
+    std::ifstream model_stream(model_path, std::ios::in | std::ios::binary);
+    if (model_stream.fail())
+        return Status(COSMO_NN_ERR_LOAD_MODEL, "open model file failed: " + model_path);
+
+    model_stream.seekg(0, std::ios::end);
+    long int model_size = static_cast<long int>(model_stream.tellg());
+    model_stream.seekg(0, std::ios::beg);
+    if (model_size <= 0)
+        return Status(COSMO_NN_ERR_LOAD_MODEL, "model file is empty or unreadable: " + model_path);
+
+    std::unique_ptr<char[]> model_data;
+    try {
+        model_data.reset(new char[static_cast<size_t>(model_size)]);
+    } catch (const std::bad_alloc&) {
+        return Status(COSMO_NN_ERR_OUT_OF_MEMORY, "not enough memory to load RKNN model");
+    }
+    model_stream.read(model_data.get(), model_size);
+
+    auto net_node = GetNodeByName("net_0");
+    if (!net_node)
+        return Status(COSMO_NN_ERR_LOAD_MODEL, "Can not find net node");
+
+    auto* net_ptr = dynamic_cast<NetNode*>(net_node);
+    if (!net_ptr)
+        return Status(COSMO_NN_ERR_LOAD_MODEL, "Failed to cast to NetNode");
+
+    net_ptr->SetModelPath(model_path);
+    return net_ptr->LoadWeight(model_data.get(), static_cast<size_t>(model_size));
 #else
     // Sophon: .nn model file has a header wrapping one or more bmodel segments.
     std::array<char, kPlainNnHeaderSize> header_data{};

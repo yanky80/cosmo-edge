@@ -40,6 +40,13 @@ if(COSMO_NN_USE_CPU_BACKEND)
     list(APPEND NN_ALL_SRC ${NN_CPU_SRC} ${NN_HOST_SRC})
 endif()
 
+if(COSMO_NN_USE_RKNN_BACKEND)
+    file(GLOB_RECURSE NN_RKNN_SRC
+        "${NN_DIR}/device/rknn/*.h" "${NN_DIR}/device/rknn/*.cc"
+    )
+    list(APPEND NN_ALL_SRC ${NN_RKNN_SRC})
+endif()
+
 # ── Build cosmo_nn OBJECT library ──
 add_library(cosmo_nn OBJECT ${NN_ALL_SRC})
 
@@ -67,6 +74,14 @@ if(COSMO_NN_USE_CPU_BACKEND)
     # ORT headers provided by onnxruntime IMPORTED target
 endif()
 
+if(COSMO_NN_USE_RKNN_BACKEND)
+    target_compile_definitions(cosmo_nn PRIVATE COSMO_NN_USE_RKNN_BACKEND)
+    target_include_directories(cosmo_nn PRIVATE
+        "${COSMO_RK3588_SDK_ROOT}/include"
+        "${COSMO_RK3588_SDK_ROOT}/include/rga"
+        "${COSMO_RK3588_SYSROOT}/usr/include/libdrm")
+endif()
+
 # Symbol hiding + suppress C++11-era warnings
 target_compile_options(cosmo_nn PRIVATE
     -fvisibility=hidden
@@ -82,6 +97,12 @@ if(COSMO_NN_USE_SOPHON_BACKEND)
 endif()
 if(COSMO_NN_USE_CPU_BACKEND)
     target_link_libraries(cosmo_nn PRIVATE onnxruntime)
+endif()
+if(COSMO_NN_USE_RKNN_BACKEND)
+    target_link_libraries(cosmo_nn PRIVATE
+        "${COSMO_RK3588_RKNNRT_LIB}"
+        "${COSMO_RK3588_RGA_LIB}"
+        "${COSMO_RK3588_DRM_LIB}")
 endif()
 
 # Ensure all ExternalProject third-party targets are built before compiling NN

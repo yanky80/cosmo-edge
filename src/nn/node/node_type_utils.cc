@@ -44,6 +44,8 @@ NodeType NodeTypeUtils::NodeTypeFromStr(std::string name) {
         return NODE_YOLO_E2E_DECODE;
     if (name == "yolo26_raw_postprocess")
         return NODE_YOLO26_RAW_DECODE;
+    if (name == "image_to_tensor")
+        return NODE_IMAGE_TO_TENSOR;
     if (name == "split")
         return NODE_SPLIT;
     if (name == "split_arg_max")
@@ -99,6 +101,8 @@ std::string NodeTypeUtils::NodeTypeToStr(NodeType type) {
             return "yolo_e2e_decode";
         case NODE_YOLO26_RAW_DECODE:
             return "yolo26_raw_decode";
+        case NODE_IMAGE_TO_TENSOR:
+            return "image_to_tensor";
         case NODE_SPLIT:
             return "split";
         case NODE_SPLIT_ARG_MAX:

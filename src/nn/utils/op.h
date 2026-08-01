@@ -164,6 +164,21 @@ public:
     std::vector<int> output_zero_points{};
 };
 
+class PUBLIC ImageToTensor : public Op {
+public:
+    explicit ImageToTensor(const std::string name_ = "image_to_tensor");
+
+    virtual ~ImageToTensor();
+
+    virtual std::string Description() override;
+
+    // Width/height of the square RKNN input (e.g. 640x640).
+    int input_width  = 0;
+    int input_height = 0;
+    // RGB padding color used to initialize the letterbox border.
+    std::vector<int> padding_color = {114, 114, 114};
+};
+
 class PUBLIC AffineCrop : public Op {
 public:
     explicit AffineCrop(const std::string name_ = "affine_crop");
