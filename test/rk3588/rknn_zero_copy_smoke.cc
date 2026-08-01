@@ -18,7 +18,7 @@
 //     src/nn/utils/blob_memory_size_utils.cc src/nn/utils/data_type_utils.cc \
 //     src/nn/node/node.cc src/nn/node/net_node.cc src/nn/node/node_type_utils.cc \
 //     src/nn/node/node_creator.cc src/nn/node/yolo26_raw_decode_node.cc \
-//     src/nn/device/naive/naive_device.cc \
+//     src/nn/device/naive/naive_device.cc src/nn/device/naive/naive_context.cc \
 //     -I <rknn-sdk>/include -I <rknn-sdk>/include/rga -I /usr/include/libdrm \
 //     -lrknnrt -lrga -ldrm $(pkg-config --cflags --libs libavcodec libavformat libavutil libdrm) \
 //     -lpthread -o rknn_zero_copy_smoke
