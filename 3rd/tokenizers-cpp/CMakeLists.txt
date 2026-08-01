@@ -13,8 +13,14 @@ message(STATUS "system-name" ${CMAKE_SYSTEM_NAME})
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
   list(APPEND TOKENIZERS_C_LINK_LIBS ${CMAKE_DL_LIBS})
-  if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+  if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64" OR CMAKE_C_COMPILER MATCHES "aarch64-linux-gnu")
     set(TOKENIZERS_CPP_CARGO_TARGET aarch64-unknown-linux-gnu)
+    set(CARGO_EXTRA_ENVS
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/usr/bin/aarch64-linux-gnu-gcc
+      CC_aarch64_unknown_linux_gnu=/usr/bin/aarch64-linux-gnu-gcc
+      CXX_aarch64_unknown_linux_gnu=/usr/bin/aarch64-linux-gnu-g++
+      AR_aarch64_unknown_linux_gnu=/usr/bin/aarch64-linux-gnu-ar
+    )
   endif()
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
   set(TOKENIZERS_CPP_CARGO_TARGET wasm32-unknown-emscripten)

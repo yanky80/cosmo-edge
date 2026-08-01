@@ -9,12 +9,10 @@ ExternalProject_Add(
     SOURCE_DIR ${CURL_SOURCE_DIR}
 
     CMAKE_ARGS
-        -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
-        -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+        ${COSMO_EXTERNAL_PROJECT_CMAKE_ARGS}
         -DCMAKE_INSTALL_PREFIX=${CURL_INSTALL_DIR}
         -DOPENSSL_ROOT_DIR=${THIRDPARTY_INSTALL_PREFIX}/openssl
         -DBUILD_SHARED_LIBS=ON
-        -DCURL_USE_LIBPSL=OFF
         # Cross-compilation skips curl's host CA auto-detection. This path is
         # resolved on the target at runtime and must be provided by the image.
         -DCURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
@@ -25,8 +23,25 @@ ExternalProject_Add(
         -DBUILD_TESTING=OFF
         -DBUILD_CURL_EXE=OFF
         -DBUILD_EXAMPLES=OFF
+
+    CMAKE_CACHE_ARGS
+        -DOPENSSL_ROOT_DIR:PATH=${THIRDPARTY_INSTALL_PREFIX}/openssl
+        -DOPENSSL_INCLUDE_DIR:PATH=${THIRDPARTY_INSTALL_PREFIX}/openssl/include
+        -DOPENSSL_SSL_LIBRARY:FILEPATH=${THIRDPARTY_INSTALL_PREFIX}/openssl/lib/libssl.so
+        -DOPENSSL_CRYPTO_LIBRARY:FILEPATH=${THIRDPARTY_INSTALL_PREFIX}/openssl/lib/libcrypto.so
+        -DCURL_USE_OPENSSL:BOOL=ON
+        -DCURL_USE_PKGCONFIG:BOOL=OFF
+        -DCURL_USE_LIBPSL:BOOL=OFF
+        -DCURL_ZLIB:STRING=OFF
+        -DCURL_BROTLI:STRING=OFF
+        -DCURL_ZSTD:STRING=OFF
+        -DCURL_DISABLE_LDAP:BOOL=ON
+        -DCURL_DISABLE_LDAPS:BOOL=ON
+        -DUSE_LIBIDN2:BOOL=OFF
+        -DCURL_USE_LIBSSH2:BOOL=OFF
+        -DENABLE_ARES:BOOL=OFF
     
-    INSTALL_COMMAND ${CMAKE_COMMAND} --build . --target install
+    INSTALL_COMMAND ${CMAKE_COMMAND} --install . --prefix ${CURL_INSTALL_DIR}
 
     DEPENDS openssl_external
 

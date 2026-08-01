@@ -9,8 +9,8 @@ set(MP4V2_CONFIGURE_ARGS
     --disable-util
     --enable-shared=yes
     --enable-static=no
-    CC=${CMAKE_C_COMPILER}
-    CXX=${CMAKE_CXX_COMPILER}
+    CC=${COSMO_EXTERNAL_PROJECT_CC}
+    CXX=${COSMO_EXTERNAL_PROJECT_CXX}
 )
 
 if(COSMO_TARGET_ARCH STREQUAL "aarch64")
@@ -50,4 +50,3 @@ install(DIRECTORY ${MP4V2_INSTALL_DIR}/lib/
     FILES_MATCHING
         PATTERN "*so*"
 )
-

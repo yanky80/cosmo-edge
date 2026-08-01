@@ -184,9 +184,30 @@ if(NOT DEFINED CACHE{RESOURCE_DIR})
 endif()
 
 if(COSMO_TARGET_TOOLCHAIN_FILE AND
-   NOT CMAKE_TOOLCHAIN_FILE AND
-   NOT DEFINED CACHE{CMAKE_C_COMPILER} AND
-   NOT DEFINED CACHE{CMAKE_CXX_COMPILER})
+   NOT CMAKE_TOOLCHAIN_FILE)
     set(CMAKE_TOOLCHAIN_FILE "${COSMO_TARGET_TOOLCHAIN_FILE}"
         CACHE FILEPATH "Toolchain derived from COSMO_TARGET_PLATFORM")
+endif()
+
+if(COSMO_TARGET_ARCH STREQUAL "aarch64")
+    if(NOT DEFINED CACHE{CMAKE_C_COMPILER} OR NOT "$CACHE{CMAKE_C_COMPILER}" MATCHES "aarch64")
+        set(CMAKE_C_COMPILER "/usr/bin/aarch64-linux-gnu-gcc"
+            CACHE FILEPATH "C compiler for aarch64 targets" FORCE)
+    endif()
+    if(NOT DEFINED CACHE{CMAKE_CXX_COMPILER} OR NOT "$CACHE{CMAKE_CXX_COMPILER}" MATCHES "aarch64")
+        set(CMAKE_CXX_COMPILER "/usr/bin/aarch64-linux-gnu-g++"
+            CACHE FILEPATH "CXX compiler for aarch64 targets" FORCE)
+    endif()
+    if(NOT DEFINED CACHE{CMAKE_AR} OR NOT "$CACHE{CMAKE_AR}" MATCHES "aarch64")
+        set(CMAKE_AR "/usr/bin/aarch64-linux-gnu-ar"
+            CACHE FILEPATH "Archiver for aarch64 targets" FORCE)
+    endif()
+    if(NOT DEFINED CACHE{CMAKE_RANLIB} OR NOT "$CACHE{CMAKE_RANLIB}" MATCHES "aarch64")
+        set(CMAKE_RANLIB "/usr/bin/aarch64-linux-gnu-ranlib"
+            CACHE FILEPATH "ranlib for aarch64 targets" FORCE)
+    endif()
+    if(NOT DEFINED CACHE{CMAKE_STRIP} OR NOT "$CACHE{CMAKE_STRIP}" MATCHES "aarch64")
+        set(CMAKE_STRIP "/usr/bin/aarch64-linux-gnu-strip"
+            CACHE FILEPATH "strip for aarch64 targets" FORCE)
+    endif()
 endif()

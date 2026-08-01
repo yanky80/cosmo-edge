@@ -12,6 +12,8 @@
 
 #include "media/FrameSurface.h"
 #include "media/IOsdTextRenderer.h"
+#include "media/PixelFormat.h"
+#include "media/VideoFrame.h"
 #include "mem/DeviceContext.h"
 #include "mem/IDeviceContext.h"
 #include "service/detail/ServiceRegistry.h"
@@ -22,8 +24,6 @@
 #include <future>
 
 #include "media/IOsdTextRenderer.h"
-#include "media/PixelFormat.h"
-#include "media/VideoFrame.h"
 #include "mem/AllocatorCpu.h"
 #include "mem/IDeviceContext.h"
 #include "mem/MemoryPoolMng.h"
