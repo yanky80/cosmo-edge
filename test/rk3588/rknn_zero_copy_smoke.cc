@@ -39,6 +39,8 @@
 #include <string>
 #include <vector>
 
+#include <sys/mman.h>
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -224,6 +226,7 @@ struct Options {
     std::string model;
     std::string source;
     std::string compare_ref;
+    std::string draw_dir;
     int image_size  = 640;
     int max_frames  = 3;
     float confidence = 0.25F;
@@ -244,6 +247,8 @@ Options ParseOptions(int argc, char** argv) {
             options.source = value(i);
         else if (argument == "--compare-ref")
             options.compare_ref = value(i);
+        else if (argument == "--draw-dir")
+            options.draw_dir = value(i);
         else if (argument == "--imgsz")
             options.image_size = std::stoi(value(i));
         else if (argument == "--frames")
@@ -275,6 +280,193 @@ std::string ReadFile(const std::string& path) {
     Require(static_cast<bool>(file.read(data.data(), size)), "could not read file: " + path);
     return data;
 }
+
+// ── Frame dumper: reads the DRM surface DMA-BUF back to host memory, draws
+//    this test's detections, and writes PPM frames (ffmpeg converts to JPG).
+//    Diagnostic aid only — the inference path itself never creates a host
+//    RGB buffer. ─────────────────────────────────────────────────────────
+namespace {
+
+// 5x7 bitmap font: '0'-'9', 'c', '.', ' ', '-'.
+constexpr uint8_t kFontGlyphs[][7] = {
+    {0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E},  // 0
+    {0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E},  // 1
+    {0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F},  // 2
+    {0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E},  // 3
+    {0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02},  // 4
+    {0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E},  // 5
+    {0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E},  // 6
+    {0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08},  // 7
+    {0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E},  // 8
+    {0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C},  // 9
+    {0x0E, 0x10, 0x10, 0x10, 0x10, 0x10, 0x0E},  // c
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C},  // .
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},  // space
+    {0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00},  // -
+};
+
+constexpr int kGlyphWidth = 5;
+constexpr int kGlyphHeight = 7;
+constexpr int kTextScale = 2;
+
+int GlyphIndex(char character) {
+    if (character >= '0' && character <= '9')
+        return character - '0';
+    if (character == 'c')
+        return 10;
+    if (character == '.')
+        return 11;
+    if (character == ' ')
+        return 12;
+    if (character == '-')
+        return 13;
+    return 12;  // unknown -> space
+}
+
+std::array<uint8_t, 3> ClassColor(int class_id) {
+    switch (class_id) {
+        case 0:
+            return {76, 175, 80};   // green
+        case 1:
+            return {244, 67, 54};   // red
+        case 2:
+            return {33, 150, 243};  // blue
+        case 3:
+            return {255, 193, 7};   // amber
+        case 4:
+            return {0, 188, 212};   // cyan
+        case 5:
+            return {156, 39, 176};  // purple
+        default:
+            return {255, 255, 255};
+    }
+}
+
+class FrameDumper {
+public:
+    FrameDumper(std::string directory, int width, int height)
+        : directory_(std::move(directory)), width_(width), height_(height) {
+        rgb_.resize(static_cast<size_t>(width_) * static_cast<size_t>(height_) * 3);
+    }
+
+    void Dump(const cosmo::media::FrameSurface& surface, const std::vector<Detection>& detections,
+              int frame_index) {
+        Require(surface.planes.size() == 2, "cannot dump a non-NV12 surface");
+        const size_t map_length = surface.planes[0].size;
+        void* mapping = mmap(nullptr, map_length, PROT_READ, MAP_SHARED, surface.planes[0].fd, 0);
+        Require(mapping != MAP_FAILED, "could not mmap the DMA-BUF surface fd");
+        struct MappingGuard {
+            void* value;
+            size_t length;
+            ~MappingGuard() {
+                munmap(value, length);
+            }
+        } guard{mapping, map_length};
+
+        const auto* y = static_cast<const uint8_t*>(mapping) + surface.planes[0].offset;
+        const auto* uv = static_cast<const uint8_t*>(mapping) + surface.planes[1].offset;
+        ConvertNv12(y, surface.planes[0].pitch, uv, surface.planes[1].pitch);
+        for (const auto& detection : detections)
+            DrawDetection(detection);
+        WritePpm(frame_index);
+    }
+
+private:
+    void ConvertNv12(const uint8_t* y, size_t y_pitch, const uint8_t* uv, size_t uv_pitch) {
+        for (int row = 0; row < height_; ++row) {
+            for (int col = 0; col < width_; ++col) {
+                const int yy = y[row * y_pitch + static_cast<size_t>(col)] - 16;
+                const int u = uv[(row / 2) * uv_pitch + static_cast<size_t>(col)] - 128;
+                const int v = uv[(row / 2) * uv_pitch + static_cast<size_t>(col) + 1] - 128;
+                auto clamp8 = [](int value) -> uint8_t {
+                    return static_cast<uint8_t>(value < 0 ? 0 : (value > 255 ? 255 : value));
+                };
+                const int r = (298 * yy + 409 * v + 128) >> 8;
+                const int g = (298 * yy - 100 * u - 208 * v + 128) >> 8;
+                const int b = (298 * yy + 516 * u + 128) >> 8;
+                uint8_t* pixel = &rgb_[static_cast<size_t>(row) * static_cast<size_t>(width_) * 3 +
+                                       static_cast<size_t>(col) * 3];
+                pixel[0] = clamp8(r);
+                pixel[1] = clamp8(g);
+                pixel[2] = clamp8(b);
+            }
+        }
+    }
+
+    void SetPixel(int x, int y, uint8_t r, uint8_t g, uint8_t b) {
+        if (x < 0 || y < 0 || x >= width_ || y >= height_)
+            return;
+        uint8_t* pixel = &rgb_[static_cast<size_t>(y) * static_cast<size_t>(width_) * 3 +
+                               static_cast<size_t>(x) * 3];
+        pixel[0] = r;
+        pixel[1] = g;
+        pixel[2] = b;
+    }
+
+    void FillRect(int x0, int y0, int x1, int y1, uint8_t r, uint8_t g, uint8_t b) {
+        for (int y = y0; y <= y1; ++y)
+            for (int x = x0; x <= x1; ++x)
+                SetPixel(x, y, r, g, b);
+    }
+
+    void DrawGlyph(int x, int y, char character, uint8_t r, uint8_t g, uint8_t b) {
+        const auto& glyph = kFontGlyphs[GlyphIndex(character)];
+        for (int row = 0; row < kGlyphHeight; ++row) {
+            for (int col = 0; col < kGlyphWidth; ++col) {
+                if ((glyph[row] >> (4 - col)) & 1) {
+                    for (int dy = 0; dy < kTextScale; ++dy)
+                        for (int dx = 0; dx < kTextScale; ++dx)
+                            SetPixel(x + col * kTextScale + dx, y + row * kTextScale + dy, r, g, b);
+                }
+            }
+        }
+    }
+
+    void DrawText(int x, int y, const std::string& text, uint8_t r, uint8_t g, uint8_t b) {
+        int cursor = x;
+        for (char character : text) {
+            DrawGlyph(cursor, y, character, r, g, b);
+            cursor += (kGlyphWidth + 1) * kTextScale;
+        }
+    }
+
+    void DrawDetection(const Detection& detection) {
+        const auto color = ClassColor(detection.class_id);
+        const int x0 = static_cast<int>(std::round(detection.x1));
+        const int y0 = static_cast<int>(std::round(detection.y1));
+        const int x1 = static_cast<int>(std::round(detection.x2));
+        const int y1 = static_cast<int>(std::round(detection.y2));
+        constexpr int kBoxThickness = 2;
+        FillRect(x0, y0, x1, y0 + kBoxThickness - 1, color[0], color[1], color[2]);
+        FillRect(x0, y1 - kBoxThickness + 1, x1, y1, color[0], color[1], color[2]);
+        FillRect(x0, y0, x0 + kBoxThickness - 1, y1, color[0], color[1], color[2]);
+        FillRect(x1 - kBoxThickness + 1, y0, x1, y1, color[0], color[1], color[2]);
+
+        std::ostringstream label;
+        label << "c" << detection.class_id << " " << std::fixed << std::setprecision(2) << detection.score;
+        const int label_width = static_cast<int>(label.str().size()) * (kGlyphWidth + 1) * kTextScale;
+        const int label_height = kGlyphHeight * kTextScale;
+        const int bar_y0 = std::max(0, y0 - label_height - 2);
+        FillRect(x0, bar_y0, x0 + label_width + 2, y0 - 2, color[0], color[1], color[2]);
+        DrawText(x0 + 1, bar_y0 + 1, label.str(), 255, 255, 255);
+    }
+
+    void WritePpm(int frame_index) {
+        const std::string path = directory_ + "/frame_" + std::to_string(frame_index) + ".ppm";
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        Require(file.good(), "could not open output image: " + path);
+        file << "P6\n" << width_ << " " << height_ << "\n255\n";
+        file.write(reinterpret_cast<const char*>(rgb_.data()), static_cast<std::streamsize>(rgb_.size()));
+        Require(file.good(), "could not write output image: " + path);
+    }
+
+    std::string directory_;
+    int width_;
+    int height_;
+    std::vector<uint8_t> rgb_;
+};
+
+}  // namespace
 
 class ZeroCopyInference {
 public:
@@ -504,6 +696,7 @@ int main(int argc, char** argv) {
         MppDecoder decoder(options.source);
         ZeroCopyInference inference(options);
         std::vector<std::vector<Detection>> frames;
+        std::unique_ptr<FrameDumper> dumper;
 
         AVFramePtr frame;
         int frame_index = 0;
@@ -545,6 +738,11 @@ int main(int argc, char** argv) {
                 Require(false, "detections are not deterministic at frame " + std::to_string(frame_index));
             }
             frames.push_back(first);
+            if (!options.draw_dir.empty()) {
+                if (!dumper)
+                    dumper = std::make_unique<FrameDumper>(options.draw_dir, frame->width, frame->height);
+                dumper->Dump(surface, first, frame_index);
+            }
             std::cout << "frame=" << frame_index << " w=" << frame->width << " h=" << frame->height
                       << " detections=" << first.size() << "\n";
             ++frame_index;
