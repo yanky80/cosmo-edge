@@ -57,6 +57,7 @@ public:
     VideoFramePtr I4202RGB(VideoFramePtr) override;
     VideoFramePtr BGR2I420(VideoFramePtr) override;
     VideoFramePtr RGB2I420(VideoFramePtr) override;
+    VideoFramePtr NV12ToI420(VideoFramePtr) override;
 
 private:
     std::unique_ptr<cosmo::media::IVideoFrameProc> proc_;

@@ -55,6 +55,10 @@ VideoFramePtr VideoFrameServiceImpl::CopyJpegSrcFrame(VideoFramePtr srcImage) {
             return proc_->BGR2I420(srcImage);
         } else if (media::PixelFormat::PIXEL_RGB8 == srcImage->GetPixelFormat()) {
             return proc_->RGB2I420(srcImage);
+        } else if (media::PixelFormat::PIXEL_NV12 == srcImage->GetPixelFormat()) {
+            // RK3588 hardware decode: materialize a host frame for
+            // preview/OSD/capture consumers (zero-copy inference untouched).
+            return proc_->CopyFrame(srcImage);
         }
 #endif
     }
@@ -238,6 +242,13 @@ VideoFramePtr VideoFrameServiceImpl::BGR2I420(VideoFramePtr frame) {
 VideoFramePtr VideoFrameServiceImpl::RGB2I420(VideoFramePtr frame) {
     if (proc_) {
         return proc_->RGB2I420(frame);
+    }
+    return nullptr;
+}
+
+VideoFramePtr VideoFrameServiceImpl::NV12ToI420(VideoFramePtr frame) {
+    if (proc_) {
+        return proc_->NV12ToI420(frame);
     }
     return nullptr;
 }

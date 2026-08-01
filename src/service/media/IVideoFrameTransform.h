@@ -79,6 +79,12 @@ public:
     /// @param frame Source RGB frame.
     /// @return I420 frame.
     virtual VideoFramePtr RGB2I420(VideoFramePtr) = 0;
+
+    /// Convert an NV12 frame to I420 (YUV) format. On the RK3588 backend this
+    /// also materializes the DMA-BUF surface to host memory on demand.
+    /// @param frame Source NV12 frame.
+    /// @return I420 frame.
+    virtual VideoFramePtr NV12ToI420(VideoFramePtr) = 0;
 };
 
 }  // namespace cosmo::service

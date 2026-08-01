@@ -365,6 +365,11 @@ AlgDataPtr AlgChannelDecode::ColorConvert(AlgDataPtr demux_data, VideoFramePtr i
         }
     } else if (pixel_format == media::PixelFormat::PIXEL_I420) {
         ai_frame = transform.I4202BGR(in_data);
+    } else if (pixel_format == media::PixelFormat::PIXEL_NV12) {
+        // RK3588 hardware decode: frames carry the NV12 DRM PRIME surface.
+        // Keep the zero-copy frame for inference; host conversion happens on
+        // demand only for preview/capture/OSD/record consumers.
+        ai_frame = in_data;
     } else {
         LOG_WARN("{} unsupported decoded pixel format {}", name_, static_cast<int>(pixel_format));
     }

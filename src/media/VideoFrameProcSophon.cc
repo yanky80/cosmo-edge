@@ -124,6 +124,13 @@ namespace media {
         return ConvertPixelFormat(frame, PixelFormat::PIXEL_I420, PixelFormat::PIXEL_RGB8, "I4202RGB");
     }
 
+    VideoFramePtr VideoFrameProcSophon::NV12ToI420(VideoFramePtr frame) {
+        // Sophon decoders never produce NV12 frames; not supported on this backend.
+        static_cast<void>(frame);
+        LOG_WARN("{}", "NV12ToI420 is not supported on the Sophon media backend");
+        return nullptr;
+    }
+
     VideoFramePtr VideoFrameProcSophon::Crop(const VideoFramePtr srcPicture, const util::Box roi) {
 #ifdef DEBUG_DURATION
         auto timpointIn = std::chrono::high_resolution_clock::now();

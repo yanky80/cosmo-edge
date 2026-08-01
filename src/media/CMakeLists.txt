@@ -51,7 +51,10 @@ set(MEDIA_RK3588_SRC
     VideoDecoderCreateRk3588.cc
     VideoDecoderRk3588.cc        VideoDecoderRk3588.h
     VideoEncoderCreateRk3588.cc
+    VideoEncoderCpu.cc           VideoEncoderCpu.h
+    VideoFrameProcCpu.cc         VideoFrameProcCpu.h
     VideoFrameProcFactoryRk3588.cc
+    VideoFrameProcRk3588.cc      VideoFrameProcRk3588.h
 )
 
 if(COSMO_MEDIA_USE_SOPHON_BACKEND)

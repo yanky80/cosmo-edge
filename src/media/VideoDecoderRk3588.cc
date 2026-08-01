@@ -1,59 +1,17 @@
 #include "media/VideoDecoderRk3588.h"
 
+#include <drm/drm_fourcc.h>
+
 #include <cerrno>
 #include <cstring>
 #include <memory>
 #include <string>
-
-#include <drm/drm_fourcc.h>
 
 #include "util/Log.h"
 
 namespace {
 
 constexpr int kNv12PlaneCount = 2;
-
-size_t PlaneEndOffset(const AVDRMLayerDescriptor& layer, int plane_index, int object_index, size_t object_size) {
-    size_t end_offset = object_size;
-    for (int candidate_index = 0; candidate_index < layer.nb_planes; ++candidate_index) {
-        if (candidate_index == plane_index) {
-            continue;
-        }
-        const auto& candidate = layer.planes[candidate_index];
-        if (candidate.object_index != object_index || candidate.offset < 0) {
-            continue;
-        }
-        const size_t candidate_offset = static_cast<size_t>(candidate.offset);
-        if (candidate_offset > static_cast<size_t>(layer.planes[plane_index].offset) && candidate_offset < end_offset) {
-            end_offset = candidate_offset;
-        }
-    }
-    return end_offset;
-}
-
-size_t PlaneSizeFromDescriptor(const AVDRMObjectDescriptor& object, const AVDRMLayerDescriptor& layer,
-                               int plane_index) {
-    const auto& plane = layer.planes[plane_index];
-    if (plane.pitch <= 0 || plane.offset < 0 || static_cast<size_t>(plane.offset) >= object.size) {
-        return 0;
-    }
-    const size_t end_offset = PlaneEndOffset(layer, plane_index, plane.object_index, object.size);
-    if (end_offset <= static_cast<size_t>(plane.offset)) {
-        return 0;
-    }
-    const size_t remaining = end_offset - static_cast<size_t>(plane.offset);
-    return remaining - (remaining % static_cast<size_t>(plane.pitch));
-}
-
-size_t PlaneVerticalStrideFromDescriptor(const AVDRMObjectDescriptor& object, const AVDRMLayerDescriptor& layer,
-                                         int plane_index) {
-    const auto& plane       = layer.planes[plane_index];
-    const size_t plane_size = PlaneSizeFromDescriptor(object, layer, plane_index);
-    if (plane_size == 0 || plane.pitch <= 0) {
-        return 0;
-    }
-    return plane_size / static_cast<size_t>(plane.pitch);
-}
 
 }  // namespace
 
@@ -112,56 +70,62 @@ bool BuildRkDrmPrimeSurface(const AVFrame& frame, FrameSurface& surface, std::st
         return false;
     }
 
+    const auto& luma   = layer.planes[0];
+    const auto& chroma = layer.planes[1];
+    if (luma.object_index < 0 || luma.object_index >= descriptor.nb_objects ||
+        chroma.object_index != luma.object_index) {
+        error = "NV12 DRM PRIME planes must share one DMA-BUF object";
+        surface.planes.clear();
+        return false;
+    }
+
+    const auto& object = descriptor.objects[luma.object_index];
+    if (object.fd < 0 || object.size == 0) {
+        error = "DRM PRIME object is missing a valid DMA-BUF fd";
+        surface.planes.clear();
+        return false;
+    }
+    if (luma.offset < 0 || luma.pitch <= 0 || chroma.offset < 0 || chroma.pitch <= 0 ||
+        static_cast<size_t>(luma.offset) >= static_cast<size_t>(object.size) ||
+        static_cast<size_t>(chroma.offset) >= static_cast<size_t>(object.size)) {
+        error = "DRM PRIME plane has invalid offset or pitch";
+        surface.planes.clear();
+        return false;
+    }
+
+    const size_t luma_pitch = static_cast<size_t>(luma.pitch);
+    if (luma_pitch != static_cast<size_t>(chroma.pitch)) {
+        error = "NV12 DRM PRIME plane pitches must match";
+        surface.planes.clear();
+        return false;
+    }
+    const size_t luma_offset   = static_cast<size_t>(luma.offset);
+    const size_t chroma_offset = static_cast<size_t>(chroma.offset);
+    if (chroma_offset <= luma_offset) {
+        error = "NV12 chroma must start after the luma plane";
+        surface.planes.clear();
+        return false;
+    }
+    // MPP returns one DMA-BUF holding both NV12 planes: the luma vertical
+    // stride spans [luma.offset, chroma.offset) and the chroma plane occupies
+    // half of the luma rows. `size` describes the shared backing allocation.
+    const size_t luma_stride = (chroma_offset - luma_offset) / luma_pitch;
+    if (luma_stride < static_cast<size_t>(frame.height) || (luma_stride % 2) != 0) {
+        error = "DRM PRIME luma plane stride is shorter than the decoded height";
+        surface.planes.clear();
+        return false;
+    }
+
     surface.memory_type = FrameSurfaceMemoryType::DmaBuf;
-    surface.planes.clear();
-    surface.planes.reserve(static_cast<size_t>(layer.nb_planes));
-
-    for (int plane_index = 0; plane_index < layer.nb_planes; ++plane_index) {
-        const auto& plane = layer.planes[plane_index];
-        if (plane.object_index < 0 || plane.object_index >= descriptor.nb_objects) {
-            error = "DRM PRIME plane references an invalid object";
-            surface.planes.clear();
-            return false;
-        }
-
-        const auto& object = descriptor.objects[plane.object_index];
-        if (object.fd < 0 || object.size == 0) {
-            error = "DRM PRIME object is missing a valid DMA-BUF fd";
-            surface.planes.clear();
-            return false;
-        }
-        if (plane.offset < 0 || plane.pitch <= 0) {
-            error = "DRM PRIME plane has invalid offset or pitch";
-            surface.planes.clear();
-            return false;
-        }
-
-        FramePlane frame_plane;
-        frame_plane.fd              = object.fd;
-        frame_plane.offset          = static_cast<size_t>(plane.offset);
-        frame_plane.pitch           = static_cast<size_t>(plane.pitch);
-        frame_plane.vertical_stride = PlaneVerticalStrideFromDescriptor(object, layer, plane_index);
-        frame_plane.size            = object.size;
-        if (frame_plane.vertical_stride == 0 || frame_plane.size == 0 || !frame_plane.IsValid(surface.memory_type)) {
-            error = "DRM PRIME plane size metadata is invalid";
-            surface.planes.clear();
-            return false;
-        }
-
-        surface.planes.push_back(frame_plane);
-    }
-
-    if (surface.planes[0].vertical_stride < static_cast<size_t>(frame.height)) {
-        error = "DRM PRIME luma plane stride is shorter than decoded height";
+    surface.planes      = {
+        {object.fd, nullptr, luma_offset, luma_pitch, luma_stride, static_cast<size_t>(object.size)},
+        {object.fd, nullptr, chroma_offset, luma_pitch, luma_stride / 2, static_cast<size_t>(object.size)},
+    };
+    if (!surface.IsValid()) {
+        error = "DRM PRIME plane size metadata is invalid";
         surface.planes.clear();
         return false;
     }
-    if (surface.planes[1].vertical_stride * 2 != surface.planes[0].vertical_stride) {
-        error = "DRM PRIME chroma plane stride does not match NV12 layout";
-        surface.planes.clear();
-        return false;
-    }
-
     return true;
 }
 
@@ -202,7 +166,14 @@ bool VideoDecoderRk3588::Open() {
     codec_ctx_->opaque       = this;
     codec_ctx_->get_format   = &VideoDecoderRk3588::GetFormat;
 
-    if (avcodec_open2(codec_ctx_, codec, nullptr) < 0) {
+    // Disable AFBC so MPP returns linear NV12 DMA-BUF surfaces. The validated
+    // reference pipeline opens rkmpp the same way; AFBC buffers would change
+    // the RGA input layout and shift detections.
+    AVDictionary* decoder_options = nullptr;
+    av_dict_set(&decoder_options, "afbc", "0", 0);
+    const int open_ret = avcodec_open2(codec_ctx_, codec, &decoder_options);
+    av_dict_free(&decoder_options);
+    if (open_ret < 0) {
         LOG_WARN("{} RK3588 avcodec_open2 failed for {}", idx_name_, decoder_name);
         avcodec_free_context(&codec_ctx_);
         return false;
@@ -297,8 +268,8 @@ VideoFramePtr VideoDecoderRk3588::GetFrame() {
     height_ = static_cast<size_t>(owned_frame->height);
 
     auto frame_surface = std::make_shared<FrameSurface>(std::move(surface));
-    auto frame = std::make_shared<VideoFrame>(static_cast<int>(width_), static_cast<int>(height_),
-                                              PixelFormat::PIXEL_NV12, frame_surface);
+    auto frame         = std::make_shared<VideoFrame>(static_cast<int>(width_), static_cast<int>(height_),
+                                                      PixelFormat::PIXEL_NV12, frame_surface);
     if (!frame || !frame->Active()) {
         LOG_WARN("{} RK3588 VideoFrame allocation failed", idx_name_);
         return nullptr;
