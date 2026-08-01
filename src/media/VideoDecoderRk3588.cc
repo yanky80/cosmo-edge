@@ -1,11 +1,11 @@
 #include "media/VideoDecoderRk3588.h"
 
+#include <drm/drm_fourcc.h>
+
 #include <cerrno>
 #include <cstring>
 #include <memory>
 #include <string>
-
-#include <drm/drm_fourcc.h>
 
 #include "util/Log.h"
 
