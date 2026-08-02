@@ -9,6 +9,9 @@
 #include "media/PixelFormat.h"
 #include "media/VideoFrame.h"
 #include "media/VideoFrameProcCpu.h"
+#ifdef COSMO_MEDIA_USE_RK3588_BACKEND
+#include "media/VideoFrameProcRk3588.h"
+#endif
 #include "mem/AllocatorCpu.h"
 #include "mem/MemoryPoolMng.h"
 
@@ -110,5 +113,23 @@ TEST_CASE("CPU NV12ToI420 rejects non-NV12 input", "[media][nv12]") {
     auto result = proc.NV12ToI420(i420);
     CHECK(result == nullptr);
 }
+
+#ifdef COSMO_MEDIA_USE_RK3588_BACKEND
+TEST_CASE("RK3588 CopyFrame does not alias host frames", "[media][rk3588]") {
+    ScopedMemoryPool pool;
+    StubOsdTextRenderer osd;
+    cosmo::media::VideoFrameProcRk3588 proc(osd);
+    auto source = std::make_shared<cosmo::media::VideoFrame>(4, 4, cosmo::media::PixelFormat::PIXEL_I420);
+    REQUIRE(source->Active());
+    source->GetData()[0] = 7;
+
+    auto copy = proc.CopyFrame(source);
+    REQUIRE(copy != nullptr);
+    CHECK(copy != source);
+    CHECK(copy->GetData()[0] == 7);
+    copy->GetData()[0] = 9;
+    CHECK(source->GetData()[0] == 7);
+}
+#endif
 
 #endif  // CPU or RK3588 media backend

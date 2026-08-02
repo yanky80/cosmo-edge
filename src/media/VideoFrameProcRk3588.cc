@@ -139,9 +139,8 @@ bool VideoFrameProcRk3588::EnsureHostData(VideoFramePtr frame) {
 }
 
 VideoFramePtr VideoFrameProcRk3588::CopyFrame(VideoFramePtr srcImage) {
-    // The materialized host frame is already a private copy of the DMA-BUF
-    // surface, so return it directly instead of copying again.
-    return MaterializeHost(std::move(srcImage));
+    auto host = MaterializeHost(std::move(srcImage));
+    return host ? cpu_.CopyFrame(host) : nullptr;
 }
 
 VideoFramePtr VideoFrameProcRk3588::BGR2I420(VideoFramePtr srcImage) {

@@ -109,9 +109,21 @@ bool BuildRkDrmPrimeSurface(const AVFrame& frame, FrameSurface& surface, std::st
     // MPP returns one DMA-BUF holding both NV12 planes: the luma vertical
     // stride spans [luma.offset, chroma.offset) and the chroma plane occupies
     // half of the luma rows. `size` describes the shared backing allocation.
-    const size_t luma_stride = (chroma_offset - luma_offset) / luma_pitch;
+    const size_t luma_span = chroma_offset - luma_offset;
+    if ((luma_span % luma_pitch) != 0) {
+        error = "NV12 luma plane size must be a whole number of rows";
+        surface.planes.clear();
+        return false;
+    }
+    const size_t luma_stride = luma_span / luma_pitch;
     if (luma_stride < static_cast<size_t>(frame.height) || (luma_stride % 2) != 0) {
         error = "DRM PRIME luma plane stride is shorter than the decoded height";
+        surface.planes.clear();
+        return false;
+    }
+    const size_t chroma_rows = luma_stride / 2;
+    if (chroma_rows > (static_cast<size_t>(object.size) - chroma_offset) / luma_pitch) {
+        error = "NV12 chroma plane exceeds the DMA-BUF allocation";
         surface.planes.clear();
         return false;
     }
@@ -119,7 +131,7 @@ bool BuildRkDrmPrimeSurface(const AVFrame& frame, FrameSurface& surface, std::st
     surface.memory_type = FrameSurfaceMemoryType::DmaBuf;
     surface.planes      = {
         {object.fd, nullptr, luma_offset, luma_pitch, luma_stride, static_cast<size_t>(object.size)},
-        {object.fd, nullptr, chroma_offset, luma_pitch, luma_stride / 2, static_cast<size_t>(object.size)},
+        {object.fd, nullptr, chroma_offset, luma_pitch, chroma_rows, static_cast<size_t>(object.size)},
     };
     if (!surface.IsValid()) {
         error = "DRM PRIME plane size metadata is invalid";

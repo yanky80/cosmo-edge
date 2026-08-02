@@ -183,6 +183,50 @@ TEST_CASE("RK3588 DRM PRIME surface extraction rejects invalid decoder output", 
         CHECK(error == "DRM PRIME plane references an invalid object");
         av_frame_unref(&frame);
     }
+
+    SECTION("luma span is not whole rows") {
+        AVDRMFrameDescriptor descriptor{};
+        descriptor.nb_objects                       = 1;
+        descriptor.objects[0].fd                    = 5;
+        descriptor.objects[0].size                  = 6145;
+        descriptor.nb_layers                        = 1;
+        descriptor.layers[0].format                 = DRM_FORMAT_NV12;
+        descriptor.layers[0].nb_planes              = 2;
+        descriptor.layers[0].planes[0].object_index = 0;
+        descriptor.layers[0].planes[0].pitch        = 128;
+        descriptor.layers[0].planes[1].object_index = 0;
+        descriptor.layers[0].planes[1].offset       = 4097;
+        descriptor.layers[0].planes[1].pitch        = 128;
+
+        AVFrame frame = MakeDrmPrimeFrame(descriptor, 64, 32);
+        FrameSurface surface;
+        std::string error;
+        REQUIRE_FALSE(BuildRkDrmPrimeSurface(frame, surface, error));
+        CHECK(error == "NV12 luma plane size must be a whole number of rows");
+        av_frame_unref(&frame);
+    }
+
+    SECTION("chroma plane exceeds the DMA-BUF") {
+        AVDRMFrameDescriptor descriptor{};
+        descriptor.nb_objects                       = 1;
+        descriptor.objects[0].fd                    = 6;
+        descriptor.objects[0].size                  = 6000;
+        descriptor.nb_layers                        = 1;
+        descriptor.layers[0].format                 = DRM_FORMAT_NV12;
+        descriptor.layers[0].nb_planes              = 2;
+        descriptor.layers[0].planes[0].object_index = 0;
+        descriptor.layers[0].planes[0].pitch        = 128;
+        descriptor.layers[0].planes[1].object_index = 0;
+        descriptor.layers[0].planes[1].offset       = 4096;
+        descriptor.layers[0].planes[1].pitch        = 128;
+
+        AVFrame frame = MakeDrmPrimeFrame(descriptor, 64, 32);
+        FrameSurface surface;
+        std::string error;
+        REQUIRE_FALSE(BuildRkDrmPrimeSurface(frame, surface, error));
+        CHECK(error == "NV12 chroma plane exceeds the DMA-BUF allocation");
+        av_frame_unref(&frame);
+    }
 }
 
 }  // namespace cosmo::media
