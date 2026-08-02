@@ -34,20 +34,34 @@
     },
     {
       "detector_instances": 3,
-      "pool_policy": "one instance per task, max three",
-      "status": "verified",
-      "decode": { "status": "not_run" },
-      "rga": { "status": "not_instrumented" },
-      "rknn": { "status": "not_instrumented" },
-      "postprocess": { "status": "not_instrumented" },
-      "end_to_end_fps": null,
-      "memory": { "status": "not_instrumented", "peak_rss_kib": null },
+      "parallel_processes": 3,
+      "frames_per_instance": 100,
+      "detections_per_instance": 168,
+      "decoder": "h264_rkmpp",
+      "surface": "DRM_PRIME NV12 DMA-BUF",
+      "dma_buf_fd_pairs": [
+        { "decoder": 33, "rknn_input": 8 },
+        { "decoder": 29, "rknn_input": 8 },
+        { "decoder": 29, "rknn_input": 8 }
+      ],
+      "elapsed_seconds": 4.129,
+      "aggregate_end_to_end_fps": 72.60,
+      "per_instance_end_to_end_fps": 24.20,
+      "decode": { "status": "verified", "milliseconds": null },
+      "rga": { "status": "verified", "milliseconds": null },
+      "rknn": { "status": "verified", "outputs": 6, "milliseconds": null },
+      "postprocess": { "status": "verified", "detections": 504, "milliseconds": null },
+      "memory": {
+        "status": "measured",
+        "peak_rss_kib_aggregate": 131440,
+        "peak_rss_kib_per_instance": [43816, 43816, 43808]
+      },
       "result": "pass"
     }
   ],
   "notes": [
     "The report records measured facts and contract checks; it has no FPS pass/fail threshold.",
     "The board-local model and video are not vendored.",
-    "Per-stage timers and peak RSS are not emitted by the current standalone smoke."
+    "Three detector processes ran concurrently; the wrapper sampled aggregate and per-process RSS."
   ]
 }
