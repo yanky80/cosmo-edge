@@ -131,7 +131,7 @@ cmake -S . -B build_rk3588 \
 - `librknnrt.so`、`librga.so`、`libdrm.so` 和 FFmpeg 共享库
 - `libdrm`、`rockchip_mpp`、FFmpeg 的 `pkg-config` 模块
 
-MPP DRM PRIME 到 RKNN 输入 tensor 的零拷贝运行时链路仍在后续 RK3588 issue 中实现；本 issue 只建立 profile 和 SDK/sysroot 校验面。
+完整的 RK3588 preview package、部署约束、诊断和板端 benchmark 见 [RK3588 Preview Operations](rk3588-preview)。
 
 ## CPU 测试构建
 
