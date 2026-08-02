@@ -52,7 +52,7 @@ per-stage timers are not exposed by the current standalone smoke and remain
 | Detector instances | Decode | RGA | RKNN | Postprocess | End-to-end | Memory | Result |
 | ---: | --- | --- | --- | --- | ---: | --- | --- |
 | 1 | hardware path verified | fd 29 → 8 | six outputs verified | 168 detections / 100 frames | 19.66 FPS | not instrumented | PASS |
-| 3 | 3 × hardware path verified | 3 × fd to RKNN verified | 3 × six outputs verified | 504 detections / 300 frames | 72.60 FPS aggregate (24.20 FPS/instance) | 131440 KiB aggregate peak (43816 KiB/instance) | PASS |
+| 3 | 3 × hardware path verified | 3 × fd to RKNN verified | 3 × six outputs verified | 504 detections / 300 frames | 72.66 FPS aggregate (24.22 FPS/instance) | 131440 KiB aggregate peak (43816 KiB/instance) | PASS |
 
 "PASS" here means the run completed and the contracts held; it is not a
 performance target.

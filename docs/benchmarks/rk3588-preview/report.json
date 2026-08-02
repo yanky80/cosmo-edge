@@ -45,8 +45,8 @@
         { "decoder": 29, "rknn_input": 8 }
       ],
       "elapsed_seconds": 4.129,
-      "aggregate_end_to_end_fps": 72.60,
-      "per_instance_end_to_end_fps": 24.20,
+      "aggregate_end_to_end_fps": 72.66,
+      "per_instance_end_to_end_fps": 24.22,
       "decode": { "status": "verified", "milliseconds": null },
       "rga": { "status": "verified", "milliseconds": null },
       "rknn": { "status": "verified", "outputs": 6, "milliseconds": null },
