@@ -200,6 +200,11 @@ namespace media {
             LOG_ERRO("{}() - invalid frame", caller);
             return nullptr;
         }
+        if (frame->GetPixelFormat() != src_fmt) {
+            LOG_ERRO("{}() - source frame format {} does not match requested source format {}", caller,
+                     static_cast<int>(frame->GetPixelFormat()), static_cast<int>(src_fmt));
+            return nullptr;
+        }
 
         auto w = static_cast<int>(frame->GetWidth());
         auto h = static_cast<int>(frame->GetHeight());
@@ -291,6 +296,10 @@ namespace media {
 
     VideoFramePtr VideoFrameProcCpu::I4202RGB(VideoFramePtr frame) {
         return ConvertI420ToPacked(frame, PixelFormat::PIXEL_RGB8, "I4202RGB");
+    }
+
+    VideoFramePtr VideoFrameProcCpu::NV12ToI420(VideoFramePtr frame) {
+        return ConvertPixelFormat(frame, PixelFormat::PIXEL_NV12, PixelFormat::PIXEL_I420, "NV12ToI420");
     }
 
     VideoFramePtr VideoFrameProcCpu::Crop(const VideoFramePtr srcPicture, const util::Box roi) {

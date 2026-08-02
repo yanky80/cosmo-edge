@@ -26,10 +26,11 @@ public:
     virtual bool EnsureHostData(VideoFramePtr frame)        = 0;
 
     // ── Color conversion ────────────────────────────────────────────────
-    virtual VideoFramePtr BGR2I420(VideoFramePtr srcImage) = 0;
-    virtual VideoFramePtr RGB2I420(VideoFramePtr srcImage) = 0;
-    virtual VideoFramePtr I4202BGR(VideoFramePtr srcImage) = 0;
-    virtual VideoFramePtr I4202RGB(VideoFramePtr srcImage) = 0;
+    virtual VideoFramePtr BGR2I420(VideoFramePtr srcImage)   = 0;
+    virtual VideoFramePtr RGB2I420(VideoFramePtr srcImage)   = 0;
+    virtual VideoFramePtr I4202BGR(VideoFramePtr srcImage)   = 0;
+    virtual VideoFramePtr I4202RGB(VideoFramePtr srcImage)   = 0;
+    virtual VideoFramePtr NV12ToI420(VideoFramePtr srcImage) = 0;
 
     // ── Image processing ────────────────────────────────────────────────
     virtual VideoFramePtr Crop(const VideoFramePtr srcPicture, const util::Box roi) = 0;

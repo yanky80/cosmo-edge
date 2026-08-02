@@ -31,6 +31,7 @@ namespace media {
         VideoFramePtr RGB2I420(VideoFramePtr srcImage) override;
         VideoFramePtr I4202BGR(VideoFramePtr srcImage) override;
         VideoFramePtr I4202RGB(VideoFramePtr srcImage) override;
+        VideoFramePtr NV12ToI420(VideoFramePtr srcImage) override;
 
         // Image processing
         VideoFramePtr Crop(const VideoFramePtr srcPicture, const util::Box roi) override;

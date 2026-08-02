@@ -66,15 +66,14 @@ Status Yolo26RawDecodeNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_b
         return Status(COSMO_NN_ERR_INVALID_INPUT, "batch size too large");
     SetCurrentBatch(top_blob, batch);
 
-    auto* top_data = static_cast<float*>(top_blob->GetHandle().base);
+    auto* top_data      = static_cast<float*>(top_blob->GetHandle().base);
     const auto top_rows = top_blob->GetBlobDesc().dims.at(1);
 
     std::vector<int> cls_thresholds;
     cls_thresholds.reserve(3);
     for (int scale_index = 0; scale_index < 3; ++scale_index)
-        cls_thresholds.push_back(
-            QuantizeThreshold(base_conf_, output_scales_.at(scale_index * 2 + 1),
-                              output_zero_points_.at(scale_index * 2 + 1)));
+        cls_thresholds.push_back(QuantizeThreshold(base_conf_, output_scales_.at(scale_index * 2 + 1),
+                                                   output_zero_points_.at(scale_index * 2 + 1)));
 
     for (int batch_index = 0; batch_index < batch; ++batch_index) {
         std::vector<Detection> detections;
@@ -88,10 +87,8 @@ Status Yolo26RawDecodeNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_b
             const int reg_hw     = grid_h * grid_w;
             const int cls_hw     = class_count * reg_hw;
 
-            auto* reg_data = static_cast<std::int8_t*>(reg_blob->GetHandle().base) +
-                             batch_index * 4 * reg_hw;
-            auto* cls_data = static_cast<std::int8_t*>(cls_blob->GetHandle().base) +
-                             batch_index * cls_hw;
+            auto* reg_data = static_cast<std::int8_t*>(reg_blob->GetHandle().base) + batch_index * 4 * reg_hw;
+            auto* cls_data = static_cast<std::int8_t*>(cls_blob->GetHandle().base) + batch_index * cls_hw;
 
             const float reg_scale = output_scales_.at(scale_index * 2);
             const int reg_zp      = output_zero_points_.at(scale_index * 2);
@@ -103,12 +100,14 @@ Status Yolo26RawDecodeNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_b
                 for (int x = 0; x < grid_w; ++x) {
                     const int cell_index = y * grid_w + x;
 
-                    float left = std::max(0.0f, Dequantize(reg_data[cell_index], reg_scale, reg_zp));
-                    float top = std::max(0.0f, Dequantize(reg_data[reg_hw + cell_index], reg_scale, reg_zp));
-                    float right =
-                        std::max(0.0f, Dequantize(reg_data[2 * reg_hw + cell_index], reg_scale, reg_zp));
-                    float bottom =
-                        std::max(0.0f, Dequantize(reg_data[3 * reg_hw + cell_index], reg_scale, reg_zp));
+                    // reg_max=1 distances are signed: an object edge may lie on
+                    // either side of its anchor cell. Clamping would shift the
+                    // box, so keep the raw dequantized values like the
+                    // reference YOLO26 decode does.
+                    const float left   = Dequantize(reg_data[cell_index], reg_scale, reg_zp);
+                    const float top    = Dequantize(reg_data[reg_hw + cell_index], reg_scale, reg_zp);
+                    const float right  = Dequantize(reg_data[2 * reg_hw + cell_index], reg_scale, reg_zp);
+                    const float bottom = Dequantize(reg_data[3 * reg_hw + cell_index], reg_scale, reg_zp);
 
                     const float anchor_x = static_cast<float>(x) + 0.5f;
                     const float anchor_y = static_cast<float>(y) + 0.5f;
@@ -117,24 +116,31 @@ Status Yolo26RawDecodeNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_b
                     const float x2       = (anchor_x + right) * stride;
                     const float y2       = (anchor_y + bottom) * stride;
 
-                    Detection candidate;
-                    candidate.cx = (x1 + x2) * 0.5f;
-                    candidate.cy = (y1 + y2) * 0.5f;
-                    candidate.w  = std::max(0.0f, x2 - x1);
-                    candidate.h  = std::max(0.0f, y2 - y1);
-
-                    for (int class_id = 0; class_id < class_count; ++class_id) {
-                        const int cls_index = class_id * reg_hw + cell_index;
-                        if (cls_data[cls_index] < cls_thresh)
-                            continue;
-
-                        candidate.score = Sigmoid(Dequantize(cls_data[cls_index], cls_scale, cls_zp));
-                        if (candidate.score < base_conf_)
-                            continue;
-
-                        candidate.class_id = class_id;
-                        detections.push_back(candidate);
+                    // One candidate per cell: the highest-scoring class,
+                    // matching the reference YOLO26 decode. Emitting every
+                    // class would change candidate ordering and therefore NMS
+                    // tie-breaking for identically-scored cells.
+                    int best_class         = 0;
+                    std::int8_t best_value = cls_data[cell_index];
+                    for (int class_id = 1; class_id < class_count; ++class_id) {
+                        const std::int8_t value = cls_data[class_id * reg_hw + cell_index];
+                        if (value > best_value) {
+                            best_value = value;
+                            best_class = class_id;
+                        }
                     }
+                    if (best_value <= cls_thresh) {
+                        continue;  // Strictly greater, like the reference.
+                    }
+
+                    Detection candidate;
+                    candidate.cx       = (x1 + x2) * 0.5f;
+                    candidate.cy       = (y1 + y2) * 0.5f;
+                    candidate.w        = std::max(0.0f, x2 - x1);
+                    candidate.h        = std::max(0.0f, y2 - y1);
+                    candidate.score    = Sigmoid(Dequantize(best_value, cls_scale, cls_zp));
+                    candidate.class_id = best_class;
+                    detections.push_back(candidate);
                 }
             }
         }
@@ -149,7 +155,7 @@ Status Yolo26RawDecodeNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_b
             for (const auto& accepted : kept) {
                 if (accepted.class_id != detection.class_id)
                     continue;
-                if (IoU(accepted, detection) >= nms_threshold_) {
+                if (IoU(accepted, detection) > nms_threshold_) {
                     suppressed = true;
                     break;
                 }
@@ -280,7 +286,7 @@ int Yolo26RawDecodeNode::QuantizeThreshold(float threshold, float scale, int zer
     if (threshold >= 1.0f)
         return 127;
 
-    const float logit = std::log(threshold / (1.0f - threshold));
+    const float logit     = std::log(threshold / (1.0f - threshold));
     const float quantized = logit / scale + zero_point;
     return static_cast<int>(std::clamp(std::lround(quantized), -128l, 127l));
 }

@@ -74,6 +74,8 @@ namespace media {
 
         VideoFramePtr I4202RGB(VideoFramePtr srcImage) override;
 
+        VideoFramePtr NV12ToI420(VideoFramePtr srcImage) override;
+
         VideoFramePtr CopyFrame(VideoFramePtr srcImage) override;
 
         // Copy device memory frame to hostData (internally allocates host buffer automatically)

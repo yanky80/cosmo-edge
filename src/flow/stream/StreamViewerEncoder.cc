@@ -106,6 +106,10 @@ void StreamViewerEncoder::ProcFrame(VideoFramePtr frame) {
                 frame = transform.BGR2I420(frame);
             } else if (frame->GetPixelFormat() == media::PixelFormat::PIXEL_RGB8) {
                 frame = transform.RGB2I420(frame);
+            } else if (frame->GetPixelFormat() == media::PixelFormat::PIXEL_NV12) {
+                // RK3588 hardware decode: convert the DMA surface to a host
+                // I420 frame on demand (zero-copy inference is untouched).
+                frame = transform.NV12ToI420(frame);
             } else {
                 LOG_WARN("StreamViewerEncoder unsupported frame pixel format {}",
                          static_cast<int>(frame->GetPixelFormat()));
