@@ -132,7 +132,7 @@ Configure-time checks cover:
 - aarch64 shared libraries such as `librknnrt.so`, `librga.so`, `libdrm.so`, and FFmpeg libs
 - required `pkg-config` modules for `libdrm`, `rockchip_mpp`, and FFmpeg
 
-The zero-copy runtime path is still implemented in follow-up RK3588 issues; this issue only introduces the profile and SDK/sysroot validation seam.
+See the [RK3588 Preview Operations](rk3588-preview) guide for the package, runtime/device requirements, zero-copy boundary, diagnostics, and board benchmark.
 
 ## CPU Test Build
 

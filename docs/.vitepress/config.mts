@@ -3,6 +3,7 @@ import { defineConfig } from 'vitepress'
 const guideZh = [
   { text: '构建指南', link: '/guide/build' },
   { text: '部署指南', link: '/guide/deployment' },
+  { text: 'RK3588 Preview', link: '/guide/rk3588-preview' },
   { text: '运行配置', link: '/guide/configuration' },
   { text: '故障排查', link: '/guide/troubleshooting' },
   { text: '架构概览', link: '/guide/architecture' },
@@ -62,6 +63,7 @@ const communityZh = [
 const guideEn = [
   { text: 'Build Guide', link: '/en/guide/build' },
   { text: 'Deployment Guide', link: '/en/guide/deployment' },
+  { text: 'RK3588 Preview', link: '/en/guide/rk3588-preview' },
   { text: 'Runtime Configuration', link: '/en/guide/configuration' },
   { text: 'Troubleshooting', link: '/en/guide/troubleshooting' },
   { text: 'Architecture Overview', link: '/en/guide/architecture' },
