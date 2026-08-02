@@ -21,13 +21,30 @@ and video paths are intentionally not copied into the repository.
 
 Build the standalone acceptance smoke on the board using the command in
 [`test/rk3588/detector_task_smoke.cc`](../../../test/rk3588/detector_task_smoke.cc),
-then run:
+then run the one-instance measurement:
 
 ```sh
-./detector_task_smoke \
+/usr/bin/time -v -o one-instance.time ./detector_task_smoke \
   --model /home/YTHC/convert/yolo26n.rknn \
   --h264 '/home/YTHC/cosmo-edge-issue10/Safety Helmet.mp4' \
-  --frames 100 --skip-host-check --skip-error-check
+  --frames 100 --skip-host-check --skip-error-check \
+  >one-instance.log 2>&1
+```
+
+Run three instances concurrently and retain each process's elapsed time and
+peak RSS:
+
+```sh
+for instance in 1 2 3; do
+  /usr/bin/time -v -o "three-instance-${instance}.time" \
+    ./detector_task_smoke \
+      --model /home/YTHC/convert/yolo26n.rknn \
+      --h264 '/home/YTHC/cosmo-edge-issue10/Safety Helmet.mp4' \
+      --frames 100 --skip-host-check --skip-error-check \
+      >"three-instance-${instance}.log" 2>&1 &
+done
+wait
+grep -hE 'Elapsed|Maximum resident' three-instance-*.time
 ```
 
 Run board commands under the repository lock:
@@ -56,3 +73,24 @@ per-stage timers are not exposed by the current standalone smoke and remain
 
 "PASS" here means the run completed and the contracts held; it is not a
 performance target.
+
+## Release verification
+
+The release candidate was checked with:
+
+```sh
+bash scripts/test_target_platform_profiles.sh
+(cd tools/scenario-bench && npm test)
+bash scripts/build_cpu_test.sh
+LD_LIBRARY_PATH="$(find build_cpu/thirdparty_install -type d -name lib -printf '%p:')prebuild/ffmpeg/x86_64/lib:3rd/onnxruntime-linux-x64-1.26.0/lib" \
+  ./build_cpu/cosmo-tests
+npm run docs:check
+```
+
+Results: all target-profile checks passed; scenario-bench passed 39/39;
+`cosmo-tests` passed 905 tests and 206512 assertions; and `docs:check` passed.
+The serialized board run began with `uname -a` and
+`cat /proc/device-tree/model`, verified the required device nodes and hardware
+decoders, and passed the one-frame zero-copy smoke, three-task detector-pool
+smoke, and fixed 100-frame run. `npm run docs:build` was not completed because
+VitePress dependencies were unavailable in that checkout.
