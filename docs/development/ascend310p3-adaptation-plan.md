@@ -90,7 +90,8 @@ CPU resize。先建立可复现的正确性和性能基线。
 
 在平台 Profile 中增加 `ascend310p3`，派生以下固定配置：
 
-- 架构为 `x86_64`。
+- 架构参数化：`COSMO_TARGET_ARCH` 合法集 `{x86_64, aarch64}`，默认 `x86_64`；
+  aarch64 时 x86_64 主机走现有 aarch64 交叉 toolchain，aarch64 主机用宿主工具链。
 - NN 后端为 Ascend，媒体后端为 Ascend。
 - 模型扩展名和主扩展名为 `.om`。
 - 模型目录 token、引擎类型和 `chip_type` 为 `ASCEND310P3`。

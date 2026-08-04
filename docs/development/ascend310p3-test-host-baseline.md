@@ -161,6 +161,33 @@ cc -o /tmp/avprobe /tmp/avprobe.c \
 该契约满足 `docs/development/ascend310p3-adaptation-plan.md` 阶段一
 “host NV12 + 一次 H2D”路径；阶段二设备帧直通需等设备帧探针确认。
 
+## aarch64 部署基线（占位）
+
+`COSMO_TARGET_ARCH=aarch64`（Kunpeng 服务器或板载 SoC）的构建配置已实现，
+但 aarch64 真机尚未复采，以下为占位基线，待实机采集后更新：
+
+| 项目 | 占位值 / 待确认 |
+| --- | --- |
+| CANN aarch64 | `COSMO_ASCEND_SDK_ROOT` 指向 aarch64 CANN 安装（版本待真机复采，预期与 x86_64 基线对应的 CANN 8.0.0/驱动 24.1.1.1 系列） |
+| 定制 FFmpeg aarch64 | 期望经 `COSMO_ASCEND_FFMPEG_ROOT` 提供 aarch64 定制 FFmpeg（`h264_ascend`/`h265_ascend`）；未提供时经 `COSMO_ASCEND_SYSROOT`/系统 FFmpeg 回退 |
+| 驱动/固件 | aarch64 板载 SoC 的驱动与固件版本待真机复采 |
+| `.om` 与宿主架构 | 假定 `.om` 制品与宿主架构无关（ATC `soc_version=Ascend310P3` 决定），需在 aarch64 真机复采时确认并更新本表 |
+
+真机复采命令（**未执行：无 aarch64 真机访问权限**，与共享 310P3 测试机的
+x86_64 基线不同，需在 aarch64 目标机上执行）：
+
+```bash
+uname -a
+npu-smi info
+cat /usr/local/Ascend/driver/version.info
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+cat "${ASCEND_TOOLKIT_HOME}/version.cfg"
+readelf -h "${ASCEND_TOOLKIT_HOME}/lib64/libascendcl.so" | grep -E "Machine|Class"
+```
+
+复采后更新本表，并同步确认 `cmake/ascend_sdk.cmake` 的 aarch64 检查项与
+`docs/guide/build.md` 的 aarch64 构建示例。
+
 ## 复验命令汇总
 
 上述全部命令按小节顺序执行一遍即为完整复验；任何值与上表不一致时，以复验

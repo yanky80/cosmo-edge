@@ -136,9 +136,12 @@ cmake -S . -B build_rk3588 \
 
 ## Ascend 310P3 Profile 配置
 
-Ascend 310P3 profile 在 x86_64 主机上构建，配置阶段校验外部 CANN SDK 和定制
-Ascend FFmpeg（`/opt/ffmpeg-4.4.1/ascend`，未安装时回退系统 FFmpeg），不向仓库
-提交 CANN、驱动、固件或定制 FFmpeg 二进制：
+Ascend 310P3 profile 默认以 x86_64 构建（锁定测试机基线），目标架构可用
+`COSMO_TARGET_ARCH` 参数化为 `aarch64`（Kunpeng 服务器或板载 SoC 部署）。
+配置阶段校验外部 CANN SDK 和定制 Ascend FFmpeg，不向仓库提交 CANN、驱动、
+固件或定制 FFmpeg 二进制。
+
+x86_64 默认构建（行为与锁定基线一致）：
 
 ```bash
 source /usr/local/Ascend/ascend-toolkit/set_env.sh   # 导出 ASCEND_TOOLKIT_HOME
@@ -146,16 +149,38 @@ cmake -S . -B build_ascend310p3 \
   -DCOSMO_TARGET_PLATFORM=ascend310p3
 ```
 
+aarch64 交叉构建（x86_64 主机 + aarch64 交叉工具链，FFmpeg 经 sysroot）：
+
+```bash
+cmake -S . -B build_ascend310p3_aarch64 \
+  -DCOSMO_TARGET_PLATFORM=ascend310p3 \
+  -DCOSMO_TARGET_ARCH=aarch64 \
+  -DCOSMO_ASCEND_SDK_ROOT=/path/to/aarch64-cann \
+  -DCOSMO_ASCEND_SYSROOT=/path/to/aarch64-sysroot
+```
+
+aarch64 原生构建（aarch64 主机）使用宿主工具链，只需 `COSMO_TARGET_ARCH=aarch64`
+和指向 aarch64 CANN 的 `COSMO_ASCEND_SDK_ROOT`，不需要 sysroot/工具链参数。
+
 配置阶段会检查：
 
-- 主机架构为 x86_64，`libascendcl.so` 为 x86_64 ELF
+- 宿主/目标组合：原生构建要求 host == target；交叉构建仅允许
+  x86_64 主机 + aarch64 目标
+- `libascendcl.so`、`libacl_dvpp.so` 的 ELF 架构与目标一致（`X86-64` / `AArch64`）
 - `include/acl/acl.h`、`include/acl/dvpp/hi_dvpp.h`
 - `lib64/libascendcl.so`、`lib64/libacl_dvpp.so`
-- 定制 Ascend FFmpeg（`h264_ascend`/`h265_ascend`）或系统 FFmpeg 的头文件与
-  `libavcodec` 等共享库
+
+FFmpeg 查找顺序：
+
+1. `COSMO_ASCEND_SYSROOT`（交叉构建与封闭测试用 sysroot）
+2. `COSMO_ASCEND_FFMPEG_ROOT` 定制 FFmpeg 根（x86_64 默认为
+   `/opt/ffmpeg-4.4.1/ascend`，锁定测试机基线）
+3. 系统 FFmpeg 开发包（按 `CMAKE_LIBRARY_ARCHITECTURE` 多架构路径回退）
 
 CANN 环境初始化使用测试机安装包提供的 `set_env.sh`；测试机软件/媒体基线见
-[310P3 测试主机基线](ascend310p3-test-host-baseline)。
+[310P3 测试主机基线](ascend310p3-test-host-baseline)。aarch64 部署基线（CANN
+aarch64、定制 FFmpeg aarch64 路径、驱动/固件版本）见该文档的
+「aarch64 部署基线（占位）」一节，待 aarch64 真机复采后更新。
 
 ## CPU 测试构建
 
