@@ -26,26 +26,51 @@ if(COSMO_TARGET_PLATFORM STREQUAL "rk3588")
     set(FFMPEG_SWSCALE_LIB "${COSMO_RK3588_SWSCALE_LIB}")
     message(STATUS "FFmpeg: using RK3588 sysroot libraries from ${COSMO_RK3588_SYSROOT}")
 elseif(COSMO_TARGET_PLATFORM STREQUAL "ascend310p3")
-    # Custom Ascend FFmpeg on the x86_64 test host (h264_ascend/h265_ascend
-    # decoders and encoders); never copied from prebuild/. COSMO_ASCEND_SYSROOT
-    # overrides the lookup for hermetic tests.
+    # Custom Ascend FFmpeg (h264_ascend/h265_ascend decoders and encoders);
+    # never copied from prebuild/. Lookup order:
+    #   1. COSMO_ASCEND_SYSROOT  (cross builds and hermetic tests)
+    #   2. COSMO_ASCEND_FFMPEG_ROOT (defaults to /opt/ffmpeg-4.4.1/ascend on
+    #      x86_64, the locked test-host baseline)
+    #   3. system FFmpeg dev packages via CMAKE_LIBRARY_ARCHITECTURE
     set(FFMPEG_PREBUILD_DIR "")
+    set(_cosmo_system_ffmpeg_include_dirs "")
+    set(_cosmo_system_ffmpeg_lib_dirs "")
+
+    # Debian-style multiarch triplet for the target (e.g. aarch64-linux-gnu).
+    set(_cosmo_ffmpeg_lib_arch "${CMAKE_LIBRARY_ARCHITECTURE}")
+    if(NOT _cosmo_ffmpeg_lib_arch)
+        if(COSMO_TARGET_ARCH STREQUAL "aarch64")
+            set(_cosmo_ffmpeg_lib_arch "aarch64-linux-gnu")
+        else()
+            set(_cosmo_ffmpeg_lib_arch "x86_64-linux-gnu")
+        endif()
+    endif()
+
     if(COSMO_ASCEND_SYSROOT)
         set(_cosmo_system_ffmpeg_no_default_path NO_DEFAULT_PATH)
         set(_cosmo_system_ffmpeg_include_dirs "${COSMO_ASCEND_SYSROOT}/usr/include")
         set(_cosmo_system_ffmpeg_lib_dirs
-            "${COSMO_ASCEND_SYSROOT}/usr/lib/x86_64-linux-gnu"
-            "${COSMO_ASCEND_SYSROOT}/usr/lib64")
-    elseif(EXISTS "/opt/ffmpeg-4.4.1/ascend/include/libavcodec/avcodec.h")
-        # Locked test-host baseline (docs/development/ascend310p3-test-host-baseline.md).
-        set(_cosmo_system_ffmpeg_no_default_path NO_DEFAULT_PATH)
-        set(_cosmo_system_ffmpeg_include_dirs "/opt/ffmpeg-4.4.1/ascend/include")
-        set(_cosmo_system_ffmpeg_lib_dirs "/opt/ffmpeg-4.4.1/ascend/lib")
+            "${COSMO_ASCEND_SYSROOT}/usr/lib/${_cosmo_ffmpeg_lib_arch}"
+            "${COSMO_ASCEND_SYSROOT}/usr/lib64"
+            "${COSMO_ASCEND_SYSROOT}/usr/lib")
     else()
-        # Fallback: system FFmpeg dev packages.
-        set(_cosmo_system_ffmpeg_no_default_path "")
-        set(_cosmo_system_ffmpeg_include_dirs "")
-        set(_cosmo_system_ffmpeg_lib_dirs "")
+        set(_cosmo_ascend_ffmpeg_root "${COSMO_ASCEND_FFMPEG_ROOT}")
+        if(NOT _cosmo_ascend_ffmpeg_root AND COSMO_TARGET_ARCH STREQUAL "x86_64")
+            # Locked test-host baseline (docs/development/ascend310p3-test-host-baseline.md).
+            set(_cosmo_ascend_ffmpeg_root "/opt/ffmpeg-4.4.1/ascend")
+        endif()
+        if(EXISTS "${_cosmo_ascend_ffmpeg_root}/include/libavcodec/avcodec.h")
+            set(_cosmo_system_ffmpeg_no_default_path NO_DEFAULT_PATH)
+            set(_cosmo_system_ffmpeg_include_dirs "${_cosmo_ascend_ffmpeg_root}/include")
+            set(_cosmo_system_ffmpeg_lib_dirs "${_cosmo_ascend_ffmpeg_root}/lib")
+        else()
+            # Fallback: system FFmpeg dev packages (multiarch-aware).
+            set(_cosmo_system_ffmpeg_no_default_path "")
+            set(_cosmo_system_ffmpeg_lib_dirs
+                "/usr/lib/${_cosmo_ffmpeg_lib_arch}"
+                "/lib/${_cosmo_ffmpeg_lib_arch}"
+                "/usr/lib64")
+        endif()
     endif()
     find_path(FFMPEG_HEADERS libavcodec/avcodec.h
         PATHS ${_cosmo_system_ffmpeg_include_dirs}

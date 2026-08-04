@@ -97,6 +97,36 @@ create_fake_ascend_sdk() {
     ASCEND_SYSROOT="$sysroot"
 }
 
+CROSS_CC=$(command -v aarch64-linux-gnu-gcc || true)
+
+create_fake_ascend_sdk_aarch64() {
+    local sdk_root="$TMP_DIR/ascend-sdk-aarch64"
+    local sysroot="$TMP_DIR/ascend-sysroot-aarch64"
+    local dummy="$TMP_DIR/ascend-dummy-aarch64.c"
+    mkdir -p \
+        "$sdk_root/include/acl/dvpp" \
+        "$sdk_root/lib64" \
+        "$sysroot/usr/include/libavcodec" \
+        "$sysroot/usr/lib/aarch64-linux-gnu"
+    touch \
+        "$sdk_root/include/acl/acl.h" \
+        "$sdk_root/include/acl/dvpp/hi_dvpp.h"
+    printf 'int cosmo_fake_ascendcl_dummy;\n' >"$dummy"
+    "$CROSS_CC" -shared -fPIC "$dummy" -o "$sdk_root/lib64/libascendcl.so"
+    "$CROSS_CC" -shared -fPIC "$dummy" -o "$sdk_root/lib64/libacl_dvpp.so"
+    touch \
+        "$sysroot/usr/include/libavcodec/avcodec.h" \
+        "$sysroot/usr/lib/aarch64-linux-gnu/libavcodec.so" \
+        "$sysroot/usr/lib/aarch64-linux-gnu/libavdevice.so" \
+        "$sysroot/usr/lib/aarch64-linux-gnu/libavfilter.so" \
+        "$sysroot/usr/lib/aarch64-linux-gnu/libavformat.so" \
+        "$sysroot/usr/lib/aarch64-linux-gnu/libavutil.so" \
+        "$sysroot/usr/lib/aarch64-linux-gnu/libswresample.so" \
+        "$sysroot/usr/lib/aarch64-linux-gnu/libswscale.so"
+    ASCEND_SDK_ROOT_AARCH64="$sdk_root"
+    ASCEND_SYSROOT_AARCH64="$sysroot"
+}
+
 create_fake_ascend_sdk
 
 run_configure x86 -DCOSMO_TARGET_PLATFORM=x86
@@ -157,6 +187,42 @@ assert_contains "$TMP_DIR/ascend310p3/CMakeCache.txt" "COSMO_MEDIA_USE_ASCEND_BA
 assert_contains "$TMP_DIR/ascend310p3/CMakeCache.txt" "RESOURCE_DIR:PATH=${ROOT_DIR}/data/resource/aiboxresource_ascend310p3"
 assert_contains "$TMP_DIR/ascend310p3.out" "Model ext: .om"
 assert_contains "$TMP_DIR/ascend310p3.out" "ASCEND310P3"
+
+# Illegal target architectures fail fast regardless of the cross compiler.
+run_configure_fail ascend-bad-target-arch \
+    -DCOSMO_TARGET_PLATFORM=ascend310p3 \
+    -DCOSMO_TARGET_ARCH=armv7l \
+    -DCOSMO_ASCEND_SDK_ROOT="$ASCEND_SDK_ROOT" \
+    -DCOSMO_ASCEND_SYSROOT="$ASCEND_SYSROOT"
+assert_contains "$TMP_DIR/ascend-bad-target-arch.err" "Unsupported COSMO_TARGET_ARCH=armv7l"
+
+if [ -n "$CROSS_CC" ]; then
+    create_fake_ascend_sdk_aarch64
+
+    run_configure ascend310p3-aarch64 \
+        -DCOSMO_TARGET_PLATFORM=ascend310p3 \
+        -DCOSMO_TARGET_ARCH=aarch64 \
+        -DCOSMO_ASCEND_SDK_ROOT="$ASCEND_SDK_ROOT_AARCH64" \
+        -DCOSMO_ASCEND_SYSROOT="$ASCEND_SYSROOT_AARCH64"
+    assert_contains "$TMP_DIR/ascend310p3-aarch64/CMakeCache.txt" "COSMO_TARGET_PLATFORM:STRING=ascend310p3"
+    assert_contains "$TMP_DIR/ascend310p3-aarch64/CMakeCache.txt" "COSMO_TARGET_ARCH:STRING=aarch64"
+    assert_contains "$TMP_DIR/ascend310p3-aarch64/CMakeCache.txt" "COSMO_NN_USE_ASCEND_BACKEND:BOOL=ON"
+    assert_contains "$TMP_DIR/ascend310p3-aarch64/CMakeCache.txt" "COSMO_MEDIA_USE_ASCEND_BACKEND:BOOL=ON"
+    assert_contains "$TMP_DIR/ascend310p3-aarch64/CMakeCache.txt" "CMAKE_TOOLCHAIN_FILE:FILEPATH=${ROOT_DIR}/toolchains/aarch64-linux.toolchain.cmake"
+    assert_contains "$TMP_DIR/ascend310p3-aarch64/CMakeCache.txt" "RESOURCE_DIR:PATH=${ROOT_DIR}/data/resource/aiboxresource_ascend310p3"
+    assert_contains "$TMP_DIR/ascend310p3-aarch64.out" "Model ext: .om"
+    assert_contains "$TMP_DIR/ascend310p3-aarch64.out" "ASCEND310P3"
+
+    run_configure_fail ascend-bad-arch-aarch64 \
+        -DCOSMO_TARGET_PLATFORM=ascend310p3 \
+        -DCOSMO_TARGET_ARCH=aarch64 \
+        -DCOSMO_ASCEND_SDK_ROOT="$ASCEND_SDK_ROOT" \
+        -DCOSMO_ASCEND_SYSROOT="$ASCEND_SYSROOT_AARCH64"
+    assert_contains "$TMP_DIR/ascend-bad-arch-aarch64.err" "aarch64 ELF"
+
+else
+    echo "aarch64-linux-gnu-gcc not found — skipping the aarch64 fake-SDK ascend310p3 cases"
+fi
 
 run_configure_fail ascend-missing-sdk \
     -DCOSMO_TARGET_PLATFORM=ascend310p3 \
