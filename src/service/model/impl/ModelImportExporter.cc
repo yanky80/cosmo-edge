@@ -40,6 +40,10 @@ void ModelImportExporter::SetRknnMetadataLoaderForTest(RknnMetadataLoader loader
     rknn_metadata_loader_ = std::move(loader);
 }
 
+void ModelImportExporter::SetAscendMetadataLoaderForTest(AscendMetadataLoader loader) {
+    ascend_metadata_loader_ = std::move(loader);
+}
+
 util::ErrorEnum ModelImportExporter::ExportModelConfig(const std::string& modelCode,
                                                        const std::string& modelName, std::string& outFilePath,
                                                        std::string& outFileName) {

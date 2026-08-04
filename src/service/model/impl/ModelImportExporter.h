@@ -31,7 +31,12 @@ public:
         std::vector<TensorMetadata> outputs;
     };
 
-    using RknnMetadataLoader = std::function<bool(const std::string&, RknnModelMetadata&, std::string&)>;
+    // Ascend OM metadata uses the same shape/name/dtype surface as RKNN, only
+    // with FP16 NCHW tensors instead of INT8 quantized ones.
+    using AscendModelMetadata = RknnModelMetadata;
+
+    using RknnMetadataLoader   = std::function<bool(const std::string&, RknnModelMetadata&, std::string&)>;
+    using AscendMetadataLoader = std::function<bool(const std::string&, AscendModelMetadata&, std::string&)>;
 
     ModelImportExporter() = default;
 
@@ -104,6 +109,7 @@ private:
     bool ValidateModelPackageContract(const std::string& configPath, const std::string& modelDir,
                                       std::string& error);
     void SetRknnMetadataLoaderForTest(RknnMetadataLoader loader);
+    void SetAscendMetadataLoaderForTest(AscendMetadataLoader loader);
 
     std::function<std::string()> get_model_path_;
     std::function<std::string()> get_model_template_path_;
@@ -112,6 +118,7 @@ private:
     std::function<void(const nlohmann::json&)> validate_model_output_format_;
     std::function<void(const std::string&, const std::string&)> set_model_path_mapping_;
     RknnMetadataLoader rknn_metadata_loader_;
+    AscendMetadataLoader ascend_metadata_loader_;
 };
 
 }  // namespace cosmo::service

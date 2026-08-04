@@ -34,6 +34,10 @@
 #include "rknn_api.h"
 #endif
 
+#ifdef COSMO_NN_USE_ASCEND_BACKEND
+#include "acl/acl.h"
+#endif
+
 namespace cosmo::service {
 
 namespace {
@@ -168,8 +172,10 @@ namespace {
         return !ec;
     }
 
-    bool IsRk3588ChipType(const std::string& chip_type) {
-        return std::equal(chip_type.begin(), chip_type.end(), "RK3588", "RK3588" + 6,
+    bool IsChipType(const std::string& chip_type, const char* expected) {
+        const size_t expected_length = std::char_traits<char>::length(expected);
+        return chip_type.size() == expected_length &&
+               std::equal(chip_type.begin(), chip_type.end(), expected, expected + expected_length,
                           [](char lhs, char rhs) {
                               return std::toupper(static_cast<unsigned char>(lhs)) ==
                                      std::toupper(static_cast<unsigned char>(rhs));
@@ -178,7 +184,8 @@ namespace {
 
     bool IsKnownModelArtifact(const std::filesystem::path& path) {
         const auto extension = path.extension().string();
-        return extension == ".onnx" || extension == ".nn" || extension == ".bmodel" || extension == ".rknn";
+        return extension == ".onnx" || extension == ".nn" || extension == ".bmodel" || extension == ".rknn" ||
+               extension == ".om";
     }
 
     std::vector<std::string> ScanPackageArtifacts(const std::string& model_dir) {
@@ -197,8 +204,8 @@ namespace {
     bool ResolvePackageArtifactPath(const std::string& model_dir, const std::string& file_name,
                                     std::string& resolved_path) {
         const std::filesystem::path artifact_name(file_name);
-        if (file_name.empty() || artifact_name.has_parent_path() || artifact_name.filename() != artifact_name ||
-            !cosmo::path::IsSafePathComponent(file_name, 200)) {
+        if (file_name.empty() || artifact_name.has_parent_path() ||
+            artifact_name.filename() != artifact_name || !cosmo::path::IsSafePathComponent(file_name, 200)) {
             return false;
         }
         return cosmo::path::ResolveExistingPathWithinRoot(
@@ -258,8 +265,15 @@ namespace {
         return std::fabs(lhs - rhs) <= 1.0e-6F;
     }
 
-    bool LoadRknnMetadataFromRuntime(const std::string& artifact_path, ModelImportExporter::RknnModelMetadata& metadata,
-                                     std::string& error) {
+    // config.json tensor "data_type" codes follow cosmo::nn::DataType
+    // (4=UINT8, 5=INT8); 2 is HALF, used for the Ascend FP16 contract.
+    constexpr int kConfigDataTypeFp16 = 2;
+
+    // Phase-1 Ascend contract runs on device 0 (docs/development/ascend310p3-adaptation-plan.md).
+    constexpr int32_t kAscendDeviceId = 0;
+
+    bool LoadRknnMetadataFromRuntime(const std::string& artifact_path,
+                                     ModelImportExporter::RknnModelMetadata& metadata, std::string& error) {
 #ifdef COSMO_NN_USE_RKNN_BACKEND
         const auto to_tensor_metadata = [](const std::string& name, const std::vector<int>& dims,
                                            const std::string& format, const std::string& type,
@@ -286,11 +300,12 @@ namespace {
             return false;
         }
 
-        rknn_context ctx = 0;
-        const int init_ret =
-            rknn_init(&ctx, const_cast<unsigned char*>(model.data()), static_cast<uint32_t>(model.size()), 0, nullptr);
+        rknn_context ctx   = 0;
+        const int init_ret = rknn_init(&ctx, const_cast<unsigned char*>(model.data()),
+                                       static_cast<uint32_t>(model.size()), 0, nullptr);
         if (init_ret != RKNN_SUCC) {
-            error = "stage=rknn-open artifact=" + artifact_path + " rknn_init ret=" + std::to_string(init_ret);
+            error =
+                "stage=rknn-open artifact=" + artifact_path + " rknn_init ret=" + std::to_string(init_ret);
             return false;
         }
 
@@ -305,8 +320,8 @@ namespace {
         rknn_input_output_num io_num{};
         const int io_ret = rknn_query(ctx, RKNN_QUERY_IN_OUT_NUM, &io_num, sizeof(io_num));
         if (io_ret != RKNN_SUCC) {
-            error = "stage=rknn-query artifact=" + artifact_path + " RKNN_QUERY_IN_OUT_NUM ret=" +
-                    std::to_string(io_ret);
+            error = "stage=rknn-query artifact=" + artifact_path +
+                    " RKNN_QUERY_IN_OUT_NUM ret=" + std::to_string(io_ret);
             return false;
         }
 
@@ -321,10 +336,9 @@ namespace {
                         std::to_string(index) + "] ret=" + std::to_string(query);
                 return false;
             }
-            metadata.inputs.push_back(
-                to_tensor_metadata(attr.name, std::vector<int>(attr.dims, attr.dims + attr.n_dims),
-                                   get_format_string(attr.fmt), get_type_string(attr.type),
-                                   get_qnt_type_string(attr.qnt_type), attr.zp, attr.scale));
+            metadata.inputs.push_back(to_tensor_metadata(
+                attr.name, std::vector<int>(attr.dims, attr.dims + attr.n_dims), get_format_string(attr.fmt),
+                get_type_string(attr.type), get_qnt_type_string(attr.qnt_type), attr.zp, attr.scale));
         }
         for (uint32_t index = 0; index < io_num.n_output; ++index) {
             rknn_tensor_attr attr{};
@@ -335,16 +349,187 @@ namespace {
                         std::to_string(index) + "] ret=" + std::to_string(query);
                 return false;
             }
-            metadata.outputs.push_back(
-                to_tensor_metadata(attr.name, std::vector<int>(attr.dims, attr.dims + attr.n_dims),
-                                   get_format_string(attr.fmt), get_type_string(attr.type),
-                                   get_qnt_type_string(attr.qnt_type), attr.zp, attr.scale));
+            metadata.outputs.push_back(to_tensor_metadata(
+                attr.name, std::vector<int>(attr.dims, attr.dims + attr.n_dims), get_format_string(attr.fmt),
+                get_type_string(attr.type), get_qnt_type_string(attr.qnt_type), attr.zp, attr.scale));
         }
         return true;
 #else
         (void)artifact_path;
         metadata = {};
         error    = "stage=rknn-open RKNN metadata loader unavailable in this build";
+        return false;
+#endif
+    }
+
+#ifdef COSMO_NN_USE_ASCEND_BACKEND
+    std::string AclDataTypeName(aclDataType type) {
+        switch (type) {
+            case ACL_FLOAT:
+                return "FP32";
+            case ACL_FLOAT16:
+                return "FP16";
+            case ACL_INT8:
+                return "INT8";
+            case ACL_INT32:
+                return "INT32";
+            case ACL_UINT8:
+                return "UINT8";
+            case ACL_INT64:
+                return "INT64";
+            case ACL_DOUBLE:
+                return "FP64";
+            case ACL_BF16:
+                return "BF16";
+            default:
+                return "UNKNOWN";
+        }
+    }
+
+    std::string AclFormatName(aclFormat format) {
+        switch (format) {
+            case ACL_FORMAT_NCHW:
+                return "NCHW";
+            case ACL_FORMAT_NHWC:
+                return "NHWC";
+            case ACL_FORMAT_ND:
+                return "ND";
+            case ACL_FORMAT_NC1HWC0:
+                return "NC1HWC0";
+            default:
+                return "UNDEFINED";
+        }
+    }
+
+    bool AclIoDimsToVector(const aclmdlIODims& io_dims, std::vector<int>& dims) {
+        dims.clear();
+        if (io_dims.dimCount == 0 || io_dims.dimCount > ACL_MAX_DIM_CNT)
+            return false;
+        dims.reserve(io_dims.dimCount);
+        for (size_t index = 0; index < io_dims.dimCount; ++index) {
+            const int64_t value = io_dims.dims[index];
+            if (value <= 0 || value > std::numeric_limits<int>::max())
+                return false;
+            dims.push_back(static_cast<int>(value));
+        }
+        return true;
+    }
+#endif
+
+    bool LoadAscendOmMetadataFromRuntime(const std::string& artifact_path,
+                                         ModelImportExporter::AscendModelMetadata& metadata,
+                                         std::string& error) {
+#ifdef COSMO_NN_USE_ASCEND_BACKEND
+        const auto to_tensor_metadata = [](const std::string& name, const std::vector<int>& dims,
+                                           const std::string& format, const std::string& type) {
+            ModelImportExporter::TensorMetadata tensor;
+            tensor.name       = name;
+            tensor.dims       = dims;
+            tensor.format     = format;
+            tensor.type       = type;
+            tensor.quant_type = "NONE";
+            return tensor;
+        };
+
+        if (const aclError init_ret = aclInit(nullptr); init_ret != ACL_SUCCESS) {
+            error =
+                "stage=ascend-open artifact=" + artifact_path + " aclInit ret=" + std::to_string(init_ret);
+            return false;
+        }
+        struct AclSessionGuard {
+            ~AclSessionGuard() {
+                (void)aclFinalize();
+            }
+        } session_guard;
+
+        if (const aclError set_ret = aclrtSetDevice(kAscendDeviceId); set_ret != ACL_SUCCESS) {
+            error = "stage=ascend-open artifact=" + artifact_path +
+                    " aclrtSetDevice ret=" + std::to_string(set_ret);
+            return false;
+        }
+        struct DeviceGuard {
+            ~DeviceGuard() {
+                (void)aclrtResetDevice(kAscendDeviceId);
+            }
+        } device_guard;
+
+        uint32_t model_id = 0;
+        if (const aclError load_ret = aclmdlLoadFromFile(artifact_path.c_str(), &model_id);
+            load_ret != ACL_SUCCESS) {
+            error = "stage=ascend-open artifact=" + artifact_path +
+                    " aclmdlLoadFromFile ret=" + std::to_string(load_ret);
+            return false;
+        }
+        struct ModelGuard {
+            uint32_t model_id;
+            ~ModelGuard() {
+                (void)aclmdlUnload(model_id);
+            }
+        } model_guard{model_id};
+
+        aclmdlDesc* desc = aclmdlCreateDesc();
+        if (desc == nullptr) {
+            error = "stage=ascend-open artifact=" + artifact_path + " aclmdlCreateDesc failed";
+            return false;
+        }
+        struct DescGuard {
+            aclmdlDesc* desc;
+            ~DescGuard() {
+                (void)aclmdlDestroyDesc(desc);
+            }
+        } desc_guard{desc};
+
+        if (const aclError desc_ret = aclmdlGetDesc(desc, model_id); desc_ret != ACL_SUCCESS) {
+            error = "stage=ascend-query artifact=" + artifact_path +
+                    " aclmdlGetDesc ret=" + std::to_string(desc_ret);
+            return false;
+        }
+
+        metadata.inputs.clear();
+        metadata.outputs.clear();
+        const size_t num_inputs  = aclmdlGetNumInputs(desc);
+        const size_t num_outputs = aclmdlGetNumOutputs(desc);
+        for (size_t index = 0; index < num_inputs; ++index) {
+            aclmdlIODims io_dims{};
+            if (const aclError dims_ret = aclmdlGetInputDims(desc, index, &io_dims);
+                dims_ret != ACL_SUCCESS) {
+                error = "stage=ascend-query artifact=" + artifact_path + " aclmdlGetInputDims[" +
+                        std::to_string(index) + "] ret=" + std::to_string(dims_ret);
+                return false;
+            }
+            std::vector<int> dims;
+            if (!AclIoDimsToVector(io_dims, dims)) {
+                error = "stage=ascend-query artifact=" + artifact_path + " aclmdlGetInputDims[" +
+                        std::to_string(index) + "] invalid dims";
+                return false;
+            }
+            metadata.inputs.push_back(
+                to_tensor_metadata(io_dims.name, dims, AclFormatName(aclmdlGetInputFormat(desc, index)),
+                                   AclDataTypeName(aclmdlGetInputDataType(desc, index))));
+        }
+        for (size_t index = 0; index < num_outputs; ++index) {
+            aclmdlIODims io_dims{};
+            if (const aclError dims_ret = aclmdlGetOutputDims(desc, index, &io_dims);
+                dims_ret != ACL_SUCCESS) {
+                error = "stage=ascend-query artifact=" + artifact_path + " aclmdlGetOutputDims[" +
+                        std::to_string(index) + "] ret=" + std::to_string(dims_ret);
+                return false;
+            }
+            std::vector<int> dims;
+            if (!AclIoDimsToVector(io_dims, dims)) {
+                error = "stage=ascend-query artifact=" + artifact_path + " aclmdlGetOutputDims[" +
+                        std::to_string(index) + "] invalid dims";
+                return false;
+            }
+            metadata.outputs.push_back(
+                to_tensor_metadata(io_dims.name, dims, AclFormatName(aclmdlGetOutputFormat(desc, index)),
+                                   AclDataTypeName(aclmdlGetOutputDataType(desc, index))));
+        }
+        return true;
+#else
+        (void)artifact_path;
+        metadata = {};
+        error    = "stage=ascend-open AscendCL metadata loader unavailable in this build";
         return false;
 #endif
     }
@@ -366,7 +551,8 @@ bool ModelImportExporter::ValidateImportedModelPackage(const std::string& model_
     }
     detail::ResolvedModelArtifacts artifacts;
     std::string artifact_error;
-    if (!detail::ModelConfigParser::ResolveModelArtifacts(config_path, model_dir, artifacts, artifact_error)) {
+    if (!detail::ModelConfigParser::ResolveModelArtifacts(config_path, model_dir, artifacts,
+                                                          artifact_error)) {
         error = MakeValidationError("artifact", config_path, model_dir, artifact_error);
         return false;
     }
@@ -389,7 +575,191 @@ bool ModelImportExporter::ValidateModelPackageContract(const std::string& config
 
     const std::string chip_type  = doc.value("chip_type", std::string());
     const std::string model_type = doc.value("model_type", std::string());
-    if (!IsRk3588ChipType(chip_type))
+
+    if (IsChipType(chip_type, "ASCEND310P3")) {
+        if (model_type != "yolo26_det") {
+            error = MakeValidationError(
+                "config", config_path, model_dir,
+                "ASCEND310P3 package only supports model_type=yolo26_det, got=" + model_type);
+            return false;
+        }
+
+        if (!doc.contains("models") || !doc["models"].is_array() || doc["models"].size() != 1 ||
+            !doc["models"][0].is_object()) {
+            error = MakeValidationError("config", config_path, model_dir,
+                                        "ASCEND310P3 YOLO26 package must declare exactly one models[] entry");
+            return false;
+        }
+
+        const auto& model           = doc["models"][0];
+        const std::string file_name = model.value("file_name", std::string());
+        std::string artifact_path;
+        if (!ResolvePackageArtifactPath(model_dir, file_name, artifact_path)) {
+            error = MakeValidationError("artifact", config_path, model_dir,
+                                        "ASCEND310P3 package must declare one explicit .om file_name");
+            return false;
+        }
+        if (std::filesystem::path(artifact_path).extension() != ".om") {
+            error = MakeValidationError("artifact", config_path, model_dir,
+                                        "ASCEND310P3 package artifact must be .om: " + artifact_path);
+            return false;
+        }
+
+        const auto package_artifacts = ScanPackageArtifacts(model_dir);
+        if (package_artifacts.size() != 1 || package_artifacts.front() != artifact_path) {
+            std::ostringstream detail;
+            detail << "single-artifact ASCEND310P3 package expected exactly one .om artifact, found "
+                   << package_artifacts.size();
+            for (const auto& path : package_artifacts)
+                detail << " [" << std::filesystem::path(path).filename().string() << "]";
+            error = MakeValidationError("artifact", config_path, model_dir, detail.str());
+            return false;
+        }
+
+        const auto& params = model.contains("params") && model["params"].is_object()
+                                 ? model["params"]
+                                 : nlohmann::json::object();
+        if (params.value("preprocess_mode", std::string()) != "image_to_tensor") {
+            error = MakeValidationError(
+                "config", config_path, model_dir,
+                "ASCEND310P3 YOLO26 package requires params.preprocess_mode=image_to_tensor");
+            return false;
+        }
+        if (params.value("output_format", std::string()) != "yolo26_raw") {
+            error =
+                MakeValidationError("config", config_path, model_dir,
+                                    "ASCEND310P3 YOLO26 package requires params.output_format=yolo26_raw");
+            return false;
+        }
+        if (params.value("reg_max", 1) != 1) {
+            error = MakeValidationError("config", config_path, model_dir,
+                                        "ASCEND310P3 YOLO26 package requires reg_max=1");
+            return false;
+        }
+        if (!params.contains("input_size") || !params["input_size"].is_array() ||
+            params["input_size"].size() != 2) {
+            error = MakeValidationError("config", config_path, model_dir,
+                                        "ASCEND310P3 YOLO26 package requires params.input_size=[w,h]");
+            return false;
+        }
+
+        if (!model.contains("inputs") || !model["inputs"].is_array() || model["inputs"].size() != 1) {
+            error = MakeValidationError("config", config_path, model_dir,
+                                        "ASCEND310P3 YOLO26 package must declare one NCHW FP16 input tensor");
+            return false;
+        }
+        if (!model.contains("outputs") || !model["outputs"].is_array() || model["outputs"].size() != 6) {
+            error =
+                MakeValidationError("config", config_path, model_dir,
+                                    "ASCEND310P3 YOLO26 package must declare six NCHW FP16 output tensors");
+            return false;
+        }
+
+        const auto input_size  = ReadShape(nlohmann::json{{"shape", params["input_size"]}});
+        const auto input_w     = input_size.at(0);
+        const auto input_h     = input_size.at(1);
+        const auto input_cfg   = model["inputs"][0];
+        const auto input_shape = ReadShape(input_cfg);
+        if (input_shape != std::vector<int>{1, 3, input_h, input_w} ||
+            input_cfg.value("data_type", -1) != kConfigDataTypeFp16) {
+            error = MakeValidationError(
+                "config", config_path, model_dir,
+                "ASCEND310P3 YOLO26 input must be NCHW FP16 [1,3,H,W]: " + DescribeConfigTensor(input_cfg));
+            return false;
+        }
+
+        static const std::array<const char*, 6> kAscendOutputNames = {"reg0", "cls0", "reg1",
+                                                                      "cls1", "reg2", "cls2"};
+        int class_count                                            = -1;
+        for (std::size_t index = 0; index < model["outputs"].size(); index += 2) {
+            const auto& reg_cfg = model["outputs"][index];
+            const auto& cls_cfg = model["outputs"][index + 1];
+            if (reg_cfg.value("name", std::string()) != kAscendOutputNames[index] ||
+                cls_cfg.value("name", std::string()) != kAscendOutputNames[index + 1]) {
+                error = MakeValidationError(
+                    "config", config_path, model_dir,
+                    "ASCEND310P3 YOLO26 outputs must be ordered reg0,cls0,reg1,cls1,reg2,cls2: " +
+                        DescribeConfigTensor(reg_cfg) + " | " + DescribeConfigTensor(cls_cfg));
+                return false;
+            }
+            const auto reg_shape = ReadShape(reg_cfg);
+            const auto cls_shape = ReadShape(cls_cfg);
+            const bool reg_ok    = reg_cfg.value("data_type", -1) == kConfigDataTypeFp16 &&
+                                reg_shape.size() == 4 && reg_shape[0] == 1 && reg_shape[1] == 4 &&
+                                reg_shape[2] > 0 && reg_shape[3] > 0;
+            const bool cls_ok = cls_cfg.value("data_type", -1) == kConfigDataTypeFp16 &&
+                                cls_shape.size() == 4 && cls_shape[0] == 1 && cls_shape[1] > 0 &&
+                                cls_shape[2] == reg_shape[2] && cls_shape[3] == reg_shape[3];
+            if (!reg_ok || !cls_ok) {
+                error = MakeValidationError(
+                    "config", config_path, model_dir,
+                    "invalid ASCEND310P3 YOLO26 output pair: " + DescribeConfigTensor(reg_cfg) + " | " +
+                        DescribeConfigTensor(cls_cfg));
+                return false;
+            }
+            if (input_h % reg_shape[2] != 0 || input_w % reg_shape[3] != 0 ||
+                input_h / reg_shape[2] != input_w / reg_shape[3]) {
+                error = MakeValidationError("config", config_path, model_dir,
+                                            "output feature map does not divide input_size cleanly: " +
+                                                DescribeConfigTensor(reg_cfg));
+                return false;
+            }
+            if (class_count == -1)
+                class_count = cls_shape[1];
+            else if (class_count != cls_shape[1]) {
+                error = MakeValidationError("config", config_path, model_dir,
+                                            "output class channels must match across scales");
+                return false;
+            }
+        }
+
+        auto metadata_loader = ascend_metadata_loader_;
+        if (!metadata_loader)
+            metadata_loader = LoadAscendOmMetadataFromRuntime;
+
+        AscendModelMetadata metadata;
+        std::string metadata_error;
+        if (!metadata_loader(artifact_path, metadata, metadata_error)) {
+            error = MakeValidationError("ascend", config_path, model_dir,
+                                        metadata_error + " artifact=" + artifact_path);
+            return false;
+        }
+        if (metadata.inputs.size() != 1 || metadata.outputs.size() != 6) {
+            std::ostringstream detail;
+            detail << "expected 1 input and 6 outputs from AscendCL metadata, got inputs="
+                   << metadata.inputs.size() << " outputs=" << metadata.outputs.size();
+            error = MakeValidationError("ascend", config_path, model_dir, detail.str());
+            return false;
+        }
+
+        const auto& runtime_input = metadata.inputs.front();
+        if (runtime_input.format != "NCHW" || runtime_input.type != "FP16" ||
+            runtime_input.dims != input_shape) {
+            error = MakeValidationError("input", config_path, model_dir,
+                                        "expected NCHW FP16 input " + DescribeConfigTensor(input_cfg) +
+                                            ", got " + DescribeRuntimeTensor(runtime_input));
+            return false;
+        }
+
+        for (std::size_t index = 0; index < metadata.outputs.size(); ++index) {
+            const auto& runtime_output = metadata.outputs[index];
+            const auto& config_output  = model["outputs"][index];
+            const auto config_shape    = ReadShape(config_output);
+            const bool matches         = runtime_output.format == "NCHW" && runtime_output.type == "FP16" &&
+                                 runtime_output.dims == config_shape &&
+                                 runtime_output.name == config_output.value("name", std::string());
+            if (!matches) {
+                error = MakeValidationError("output[" + std::to_string(index) + "]", config_path, model_dir,
+                                            "config=" + DescribeConfigTensor(config_output) +
+                                                " runtime=" + DescribeRuntimeTensor(runtime_output));
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    if (!IsChipType(chip_type, "RK3588"))
         return true;
 
     if (model_type != "yolo26_det") {
@@ -405,7 +775,7 @@ bool ModelImportExporter::ValidateModelPackageContract(const std::string& config
         return false;
     }
 
-    const auto& model = doc["models"][0];
+    const auto& model           = doc["models"][0];
     const std::string file_name = model.value("file_name", std::string());
     std::string artifact_path;
     if (!ResolvePackageArtifactPath(model_dir, file_name, artifact_path)) {
@@ -443,10 +813,12 @@ bool ModelImportExporter::ValidateModelPackageContract(const std::string& config
         return false;
     }
     if (params.value("reg_max", 1) != 1) {
-        error = MakeValidationError("config", config_path, model_dir, "RK3588 YOLO26 package requires reg_max=1");
+        error =
+            MakeValidationError("config", config_path, model_dir, "RK3588 YOLO26 package requires reg_max=1");
         return false;
     }
-    if (!params.contains("input_size") || !params["input_size"].is_array() || params["input_size"].size() != 2) {
+    if (!params.contains("input_size") || !params["input_size"].is_array() ||
+        params["input_size"].size() != 2) {
         error = MakeValidationError("config", config_path, model_dir,
                                     "RK3588 YOLO26 package requires params.input_size=[w,h]");
         return false;
@@ -463,43 +835,44 @@ bool ModelImportExporter::ValidateModelPackageContract(const std::string& config
         return false;
     }
 
-    const auto input_size = ReadShape(nlohmann::json{{"shape", params["input_size"]}});
-    const auto input_w    = input_size.at(0);
-    const auto input_h    = input_size.at(1);
-    const auto input_cfg  = model["inputs"][0];
+    const auto input_size  = ReadShape(nlohmann::json{{"shape", params["input_size"]}});
+    const auto input_w     = input_size.at(0);
+    const auto input_h     = input_size.at(1);
+    const auto input_cfg   = model["inputs"][0];
     const auto input_shape = ReadShape(input_cfg);
     if (input_shape != std::vector<int>{1, input_h, input_w, 3} || input_cfg.value("data_type", -1) != 4) {
-        error = MakeValidationError("config", config_path, model_dir,
-                                    "RK3588 YOLO26 input must be NHWC UINT8 [1,H,W,3]: " +
-                                        DescribeConfigTensor(input_cfg));
+        error = MakeValidationError(
+            "config", config_path, model_dir,
+            "RK3588 YOLO26 input must be NHWC UINT8 [1,H,W,3]: " + DescribeConfigTensor(input_cfg));
         return false;
     }
 
     int class_count = -1;
     for (std::size_t index = 0; index < model["outputs"].size(); index += 2) {
-        const auto& reg_cfg = model["outputs"][index];
-        const auto& cls_cfg = model["outputs"][index + 1];
+        const auto& reg_cfg  = model["outputs"][index];
+        const auto& cls_cfg  = model["outputs"][index + 1];
         const auto reg_shape = ReadShape(reg_cfg);
         const auto cls_shape = ReadShape(cls_cfg);
-        const bool reg_ok = reg_cfg.value("data_type", -1) == 5 && reg_shape.size() == 4 && reg_shape[0] == 1 &&
-                            reg_shape[1] == 4 && reg_shape[2] > 0 && reg_shape[3] > 0 &&
+        const bool reg_ok    = reg_cfg.value("data_type", -1) == 5 && reg_shape.size() == 4 &&
+                            reg_shape[0] == 1 && reg_shape[1] == 4 && reg_shape[2] > 0 && reg_shape[3] > 0 &&
                             reg_cfg.contains("scale") && reg_cfg.contains("zero_point") &&
                             reg_cfg.value("scale", 0.0F) > 0.0F;
-        const bool cls_ok = cls_cfg.value("data_type", -1) == 5 && cls_shape.size() == 4 && cls_shape[0] == 1 &&
-                            cls_shape[1] > 0 && cls_shape[2] == reg_shape[2] && cls_shape[3] == reg_shape[3] &&
-                            cls_cfg.contains("scale") && cls_cfg.contains("zero_point") &&
-                            cls_cfg.value("scale", 0.0F) > 0.0F;
+        const bool cls_ok = cls_cfg.value("data_type", -1) == 5 && cls_shape.size() == 4 &&
+                            cls_shape[0] == 1 && cls_shape[1] > 0 && cls_shape[2] == reg_shape[2] &&
+                            cls_shape[3] == reg_shape[3] && cls_cfg.contains("scale") &&
+                            cls_cfg.contains("zero_point") && cls_cfg.value("scale", 0.0F) > 0.0F;
         if (!reg_ok || !cls_ok) {
-            error = MakeValidationError("config", config_path, model_dir,
-                                        "invalid RK3588 YOLO26 output pair: " + DescribeConfigTensor(reg_cfg) +
-                                            " | " + DescribeConfigTensor(cls_cfg));
+            error =
+                MakeValidationError("config", config_path, model_dir,
+                                    "invalid RK3588 YOLO26 output pair: " + DescribeConfigTensor(reg_cfg) +
+                                        " | " + DescribeConfigTensor(cls_cfg));
             return false;
         }
         if (input_h % reg_shape[2] != 0 || input_w % reg_shape[3] != 0 ||
             input_h / reg_shape[2] != input_w / reg_shape[3]) {
-            error = MakeValidationError("config", config_path, model_dir,
-                                        "output feature map does not divide input_size cleanly: " +
-                                            DescribeConfigTensor(reg_cfg));
+            error = MakeValidationError(
+                "config", config_path, model_dir,
+                "output feature map does not divide input_size cleanly: " + DescribeConfigTensor(reg_cfg));
             return false;
         }
         if (class_count == -1)
@@ -534,8 +907,8 @@ bool ModelImportExporter::ValidateModelPackageContract(const std::string& config
     if (runtime_input.format != "NHWC" || runtime_input.type != "UINT8" ||
         runtime_input.dims != std::vector<int>{1, input_h, input_w, 3}) {
         error = MakeValidationError("input", config_path, model_dir,
-                                    "expected NHWC UINT8 input " + DescribeConfigTensor(input_cfg) + ", got " +
-                                        DescribeRuntimeTensor(runtime_input));
+                                    "expected NHWC UINT8 input " + DescribeConfigTensor(input_cfg) +
+                                        ", got " + DescribeRuntimeTensor(runtime_input));
         return false;
     }
 
@@ -543,7 +916,7 @@ bool ModelImportExporter::ValidateModelPackageContract(const std::string& config
         const auto& runtime_output = metadata.outputs[index];
         const auto& config_output  = model["outputs"][index];
         const auto config_shape    = ReadShape(config_output);
-        const bool matches = runtime_output.format == "NCHW" && runtime_output.type == "INT8" &&
+        const bool matches         = runtime_output.format == "NCHW" && runtime_output.type == "INT8" &&
                              runtime_output.quant_type == "AFFINE" && runtime_output.dims == config_shape &&
                              runtime_output.zero_point == config_output.value("zero_point", 0) &&
                              NearlyEqual(runtime_output.scale, config_output.value("scale", 0.0F));
