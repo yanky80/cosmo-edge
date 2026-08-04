@@ -57,14 +57,21 @@ set(MEDIA_RK3588_SRC
     VideoFrameProcRk3588.cc      VideoFrameProcRk3588.h
 )
 
+# Ascend-specific source files (custom Ascend FFmpeg hardware decoding).
+set(MEDIA_ASCEND_SRC
+    VideoDecoderAscend.cc         VideoDecoderAscend.h
+    VideoDecoderCreateAscend.cc
+)
+
 if(COSMO_MEDIA_USE_SOPHON_BACKEND)
     add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_SOPHON_SRC})
 elseif(COSMO_MEDIA_USE_RK3588_BACKEND)
     add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_RK3588_SRC})
 elseif(COSMO_MEDIA_USE_ASCEND_BACKEND)
-    # Ascend media backend (DVPP + system FFmpeg) lands in a follow-up issue;
-    # build the backend-agnostic sources only.
-    add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC})
+    # Ascend media backend: custom Ascend FFmpeg hard decoding
+    # (h264_ascend/h265_ascend) to host NV12 FrameSurfaces. The DVPP
+    # image_to_tensor node lands in a follow-up issue.
+    add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_ASCEND_SRC})
 elseif(COSMO_MEDIA_USE_CPU_BACKEND)
     add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_CPU_SRC})
 else()
