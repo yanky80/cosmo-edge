@@ -83,49 +83,83 @@ ls "${ASCEND_TOOLKIT_HOME}/lib64/" | grep -E "ascendcl|dvpp"
 
 ## FFmpeg 基线（重要）
 
-适配方案假设测试机已有“定制 FFmpeg 硬解码”，**实测不成立**：测试机安装的是
-Ubuntu 自带 FFmpeg，**没有任何昇腾硬件解码器或 hwaccel**。构建 Profile 按计划
-使用系统 FFmpeg；定制 Ascend FFmpeg 属于后续交付，其基线待其安装后复采。
+测试机有两套 FFmpeg：Ubuntu 自带 FFmpeg 6.1（工具/预览用）和
+`/opt/ffmpeg-4.4.1` 的**定制 Ascend FFmpeg 4.4.1**（昇腾媒体后端，媒体后端以
+此为准）。构建 Profile 使用定制版本，不从仓库复制任何 FFmpeg 二进制。
+
+### 定制 Ascend FFmpeg（媒体后端）
 
 | 项目 | 值 |
 | --- | --- |
-| 路径 | `/usr/bin/ffmpeg`（无 `/usr/local` 下的定制构建） |
-| 版本 | 6.1-1build2~22.04（libavcodec 60.31.102，libavutil 58.29.100） |
-| 来源 | Ubuntu 官方软件包 |
-| 硬件解码器 | 无 Ascend；仅有 `h264_v4l2m2m`、`hevc_v4l2m2m`、`h264_qsv`、`hevc_qsv` |
-| hwaccels | vdpau / vaapi / qsv / drm / opencl（无 Ascend） |
-| 软件解码像素格式 | H.264 High → `yuv420p`；HEVC Main → `yuv420p`（实测 ffprobe） |
+| 源码树 | `/opt/ffmpeg-4.4.1`（就地构建，二进制 `/opt/ffmpeg-4.4.1/ffmpeg`） |
+| 安装前缀 | `/opt/ffmpeg-4.4.1/ascend`（`bin/`、`include/`、`lib/`、`share/`） |
+| 版本 | 4.4.1（libavcodec 58.134.100，libavutil 56.70.100） |
+| 编译器 | clang 14.0.0-1ubuntu1.1 |
+| 配置 | `--enable-cross-compile --enable-shared --enable-ascend --enable-sdl --enable-ffplay --prefix=./ascend`，`--extra-libs='-lacl_dvpp_mpi -lascendcl'`（CANN acllib） |
+| 解码器 | `h264_ascend`、`h265_ascend`、`mjpeg_ascend`（Ascend HiMpi） |
+| 编码器 | `h264_ascend`、`h265_ascend` |
+| hwaccel | `ascend` |
+| 解码像素格式 | `h264_ascend`/`h265_ascend` 支持 `ascend nv12`（`ffmpeg -h decoder=...`） |
+| 编码像素格式 | `h264_ascend`/`h265_ascend` 支持 `nv12 ascend` |
+| 解码器 AVOptions | `device_id`(0-8，默认 0)、`channel_id`(0-255)、`resize`(WxH) |
+| 编码器 AVOptions | `device_id`、`channel_id`(0-127)、`profile`(0 baseline/1 main/2 high)、`rc_mode`(0 CBR/1 VBR)、`gop`、`frame_rate`、`max_bit_rate`、`movement_scene` |
+| 运行时依赖 | `/usr/local/Ascend/ascend-toolkit/latest/x86_64-linux/lib64/libacl_dvpp_mpi.so`、`libascendcl.so`、`libdvpp_op_base.so`（`ldd` 实测） |
+| 样本 | `/opt/ffmpeg-4.4.1/ascend/sample_ascend.264`（1280x720 H.264） |
 
 ```bash
-ffmpeg -version | head -3
-ffmpeg -hide_banner -decoders | grep -E "h264|hevc|ascend"
-ffmpeg -hide_banner -hwaccels
+/opt/ffmpeg-4.4.1/ffmpeg -version | head -3
+/opt/ffmpeg-4.4.1/ffmpeg -hide_banner -decoders | grep -E "ascend|h264|hevc"
+/opt/ffmpeg-4.4.1/ffmpeg -hide_banner -encoders | grep ascend
+/opt/ffmpeg-4.4.1/ffmpeg -hide_banner -hwaccels
+/opt/ffmpeg-4.4.1/ffmpeg -hide_banner -h decoder=h264_ascend
+ldd /opt/ffmpeg-4.4.1/ffmpeg
 ```
 
-测试用样本（生成于采集时，`/tmp` 下）：`/tmp/cosmo_baseline_h264.mp4`（H.264
-High，320x240，`yuv420p`）、`/tmp/cosmo_baseline_h265.mp4`（HEVC Main，
-320x240，`yuv420p`）。
+### 系统 FFmpeg（工具/预览）
 
-## AVFrame 所有权契约
+| 项目 | 值 |
+| --- | --- |
+| 路径 | `/usr/bin/ffmpeg` |
+| 版本 | 6.1-1build2~22.04（libavcodec 60.31.102） |
+| 硬件能力 | 无 Ascend 解码器/hwaccel；仅有 v4l2m2m、qsv 等 |
+| 软件解码像素格式 | H.264 High → `yuv420p`；HEVC Main → `yuv420p`（实测 ffprobe） |
 
-未执行：当前主机**没有**可导出硬件帧的定制 FFmpeg，且未安装
-`libavcodec-dev`（无法在不安装系统包的前提下编译探针；`AGENTS.md` 禁止未经
-批准安装系统包）。主机已确认在线可达，其余基线均为实测值。
+测试用样本（`/tmp` 下）：`/tmp/cosmo_baseline_h264.mp4`、`/tmp/cosmo_baseline_h265.mp4`。
 
-待定制 Ascend FFmpeg 就位后，用以下探针步骤复采并回填本表：
+## AVFrame 所有权契约（实测）
 
-1. 安装/部署定制 FFmpeg 的 dev 头文件，编译一个最小解码探针：用
-   `avcodec_find_decoder` 指定硬件解码器，逐帧打印
-   `AVFrame::format`、`width/height`、`linesize[]`、`buf[]` 个数与
-   `AVBufferRef` 类型、`AVFrame::data[]` 是否指向设备地址。
-2. 记录硬件像素格式（预期如 `AV_PIX_FMT_NV12` 或昇腾私有格式）和
-   `hw_frames_ctx` 的设备类型。
-3. 验证所有权契约：解码器返回的帧由 libavcodec 引用计数管理
-   （`av_frame_ref`/`av_frame_unref`），消费者（DVPP 输入、预览、抓图）必须
-   在各自使用期间持有引用；设备帧地址仅在该引用生命周期内有效。
+用最小探针（`avcodec_find_decoder_by_name("h264_ascend")`，链接
+`/opt/ffmpeg-4.4.1/ascend` 的头文件和共享库）解码
+`sample_ascend.264`，前 3 帧实测：
 
-该契约是 `docs/development/ascend310p3-adaptation-plan.md` 阶段二
-“设备帧直通”的前提，未确认前按阶段一“host NV12 + 一次 H2D”执行。
+```text
+decoder=h264_ascend hw_device_ctx=(nil)
+frame=0 format=nv12(23) w=1280 h=720 linesize=[1280,1280,0]
+       buf0=0x... buf1=0x... buf0_data=0x... hw_frames_ctx=(nil) data0=0x...
+```
+
+结论（默认路径，未设置 `-device_frame` 类选项）：
+
+- 输出像素格式为 `AV_PIX_FMT_NV12`（host 内存），不是 `ascend` 设备格式。
+- `buf[0]`/`buf[1]` 为有效 `AVBufferRef`，`data[0]` 指向 host 地址：
+  帧由 libavcodec 引用计数托管，生命周期用 `av_frame_ref`/`av_frame_unref`
+  管理；`hw_frames_ctx = NULL`，无设备帧上下文。
+- `h264_ascend` 同时支持 `ascend` 设备像素格式（解码器列表
+  `Supported pixel formats: ascend nv12`）；设备帧路径及其所有权归属
+  （阶段二“设备帧直通”）留待后续在真实设备帧场景下复采。
+
+探针编译命令：
+
+```bash
+cc -o /tmp/avprobe /tmp/avprobe.c \
+  -I/opt/ffmpeg-4.4.1/ascend/include \
+  -L/opt/ffmpeg-4.4.1/ascend/lib \
+  -lavformat -lavcodec -lavutil -Wl,-rpath,/opt/ffmpeg-4.4.1/ascend/lib
+/tmp/avprobe /opt/ffmpeg-4.4.1/ascend/sample_ascend.264
+```
+
+该契约满足 `docs/development/ascend310p3-adaptation-plan.md` 阶段一
+“host NV12 + 一次 H2D”路径；阶段二设备帧直通需等设备帧探针确认。
 
 ## 复验命令汇总
 

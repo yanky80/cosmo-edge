@@ -138,8 +138,9 @@ See the [RK3588 Preview Operations](rk3588-preview) guide for the package, runti
 ## Ascend 310P3 Profile Configure
 
 The Ascend 310P3 profile builds on an x86_64 host and validates the external
-CANN toolkit and the system FFmpeg at configure time. No CANN, driver,
-firmware, or custom FFmpeg binaries are committed to the repository.
+CANN toolkit and the custom Ascend FFmpeg (`/opt/ffmpeg-4.4.1/ascend`,
+falling back to system FFmpeg) at configure time. No CANN, driver, firmware,
+or custom FFmpeg binaries are committed to the repository.
 
 ```bash
 source /usr/local/Ascend/ascend-toolkit/set_env.sh   # exports ASCEND_TOOLKIT_HOME
@@ -152,7 +153,8 @@ Configure-time checks cover:
 - an x86_64 host and an x86_64 `libascendcl.so`
 - `include/acl/acl.h` and `include/acl/dvpp/hi_dvpp.h`
 - `lib64/libascendcl.so` and `lib64/libacl_dvpp.so`
-- system FFmpeg headers and shared libraries
+- custom Ascend FFmpeg (`h264_ascend`/`h265_ascend`) or system FFmpeg headers
+  and shared libraries
 
 CANN environment initialization stays with the vendor-provided `set_env.sh`;
 the locked test-host software and media baseline is recorded in

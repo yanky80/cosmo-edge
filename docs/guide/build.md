@@ -136,8 +136,9 @@ cmake -S . -B build_rk3588 \
 
 ## Ascend 310P3 Profile 配置
 
-Ascend 310P3 profile 在 x86_64 主机上构建，配置阶段校验外部 CANN SDK 和系统
-FFmpeg，不向仓库提交 CANN、驱动、固件或定制 FFmpeg 二进制：
+Ascend 310P3 profile 在 x86_64 主机上构建，配置阶段校验外部 CANN SDK 和定制
+Ascend FFmpeg（`/opt/ffmpeg-4.4.1/ascend`，未安装时回退系统 FFmpeg），不向仓库
+提交 CANN、驱动、固件或定制 FFmpeg 二进制：
 
 ```bash
 source /usr/local/Ascend/ascend-toolkit/set_env.sh   # 导出 ASCEND_TOOLKIT_HOME
@@ -150,7 +151,8 @@ cmake -S . -B build_ascend310p3 \
 - 主机架构为 x86_64，`libascendcl.so` 为 x86_64 ELF
 - `include/acl/acl.h`、`include/acl/dvpp/hi_dvpp.h`
 - `lib64/libascendcl.so`、`lib64/libacl_dvpp.so`
-- 系统 FFmpeg 头文件与 `libavcodec` 等共享库
+- 定制 Ascend FFmpeg（`h264_ascend`/`h265_ascend`）或系统 FFmpeg 的头文件与
+  `libavcodec` 等共享库
 
 CANN 环境初始化使用测试机安装包提供的 `set_env.sh`；测试机软件/媒体基线见
 [310P3 测试主机基线](ascend310p3-test-host-baseline)。
