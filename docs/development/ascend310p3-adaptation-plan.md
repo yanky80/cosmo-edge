@@ -274,7 +274,7 @@ output layout: NCHW
 
 测试命令与结果（`LD_LIBRARY_PATH` 同 CI：`prebuild/ffmpeg/x86_64/lib`、`3rd/onnxruntime-linux-x64-1.26.0/lib`、`build-cpu/thirdparty_install/{openssl,curl,event,glog,mp4v2,uuid}/lib`）：
 
-- `./cosmo-tests "[yolo26]"` → `All tests passed (78 assertions in 7 test cases)`。覆盖 FP16 黄金（阈值、三尺度、NMS、top-k、letterbox 坐标恢复）、FP32、混合 dtype / 头数量 / shape / 类别通道错误，以及 INT8 affine 回归。
+- `./cosmo-tests "[yolo26]"` → `All tests passed (120 assertions in 9 test cases)`。覆盖 FP16 黄金（阈值、三尺度、NMS、top-k、letterbox 坐标恢复）、FP32、混合 dtype / 头数量 / shape / 类别通道错误、非 NCHW layout 拒绝、NaN/Inf 跳过，以及 INT8 affine 回归。
 - `./cosmo-tests`（全量）→ 888 个用例中 887 个通过、1 个失败：`test_video_frame_proc_nv12.cc` 的 `NV12ToI420` 在 Ascend `libswscale.so.5` 的 `sws_scale` 内 SIGSEGV（该崩溃会让全量跑在随机顺序下提前终止，统计不稳定）。已用最小 standalone 程序在真机复现：NV12→YUV420P 三平面输出即崩；本地仓库自带 prebuild FFmpeg 下同一用例通过。属 Ascend FFmpeg swscale 的预存环境问题，与 Issue #27 改动（仅 `yolo26_raw_decode_node`、`detection_pipeline` 与其测试）无关，未在本 issue 修复。
 
 RK3588 板回归：未执行。原 INT8 affine 路径由本地 `[yolo26]` INT8 用例覆盖且全绿；板端 SDK 缺少可用的 `librknnrt` sysroot，完整板端构建成本高，留给 RK3588 专项验证。
