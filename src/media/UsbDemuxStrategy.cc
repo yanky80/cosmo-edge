@@ -44,7 +44,7 @@ int UsbDemuxStrategy::ParseUsbTier(const std::string& usbPath) const {
 
 util::ErrorEnum UsbDemuxStrategy::OpenInput(AVFormatContext*& fmt_ctx, const std::string& filename) {
     avdevice_register_all();
-    AVInputFormat* inputFmt = av_find_input_format("v4l2");
+    const AVInputFormat* inputFmt = av_find_input_format("v4l2");
     if (!inputFmt) {
         LOG_WARN("{}Open {} v4l2 input format not found", kTag, filename);
         return util::ErrorEnum::DemuxOpenStreamFail;

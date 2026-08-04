@@ -1,3 +1,6 @@
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb/stb_image.h"
+
 #include "media/VideoEncoder.h"
 #include "media/VideoEncoderCpu.h"
 

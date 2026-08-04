@@ -10,6 +10,13 @@ target_include_directories(cosmo_service PRIVATE
     ${CMAKE_SOURCE_DIR}/src
 )
 
+if(COSMO_NN_USE_RKNN_BACKEND)
+    target_include_directories(cosmo_service PRIVATE
+        "${COSMO_RK3588_SDK_ROOT}/include"
+    )
+    target_compile_definitions(cosmo_service PRIVATE COSMO_NN_USE_RKNN_BACKEND)
+endif()
+
 target_link_libraries(cosmo_service PRIVATE cosmo_common
     SQLiteCpp sqlite3 cryptopp pcap
     uWebSockets uSockets z openssl_ssl openssl_crypto

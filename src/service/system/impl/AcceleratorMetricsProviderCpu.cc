@@ -1,4 +1,4 @@
-#ifdef COSMO_NN_USE_CPU_BACKEND
+#if defined(COSMO_NN_USE_CPU_BACKEND) || defined(COSMO_NN_USE_RKNN_BACKEND)
 
 #include "service/system/impl/AcceleratorMetricsProvider.h"
 
@@ -24,4 +24,4 @@ std::unique_ptr<AcceleratorMetricsProvider> CreateAcceleratorMetricsProvider() {
 
 }  // namespace cosmo::service::detail
 
-#endif  // COSMO_NN_USE_CPU_BACKEND
+#endif  // COSMO_NN_USE_CPU_BACKEND || COSMO_NN_USE_RKNN_BACKEND
