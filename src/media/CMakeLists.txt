@@ -61,6 +61,10 @@ if(COSMO_MEDIA_USE_SOPHON_BACKEND)
     add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_SOPHON_SRC})
 elseif(COSMO_MEDIA_USE_RK3588_BACKEND)
     add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_RK3588_SRC})
+elseif(COSMO_MEDIA_USE_ASCEND_BACKEND)
+    # Ascend media backend (DVPP + system FFmpeg) lands in a follow-up issue;
+    # build the backend-agnostic sources only.
+    add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC})
 elseif(COSMO_MEDIA_USE_CPU_BACKEND)
     add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_CPU_SRC})
 else()
