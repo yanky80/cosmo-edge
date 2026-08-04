@@ -262,7 +262,7 @@ void RtmpCodecConfig::ConfigureStream(AVStream* stream) const {
     par->width             = width_;
     par->height            = height_;
     par->profile =
-        codec_type_ == media::VideoCodecType::kH265 ? FF_PROFILE_HEVC_MAIN : FF_PROFILE_H264_BASELINE;
+        codec_type_ == media::VideoCodecType::kH265 ? AV_PROFILE_HEVC_MAIN : AV_PROFILE_H264_BASELINE;
 
     stream->time_base      = {1, 90000};
     stream->duration       = static_cast<int64_t>(90000.0f / fps_);

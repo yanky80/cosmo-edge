@@ -51,6 +51,26 @@ static constexpr const char* kCompatibleModelFileExts[] = {".nn", ".bmodel"};
 /// Add a new chip here to support it across the model pipeline.
 static constexpr const char* kSupportedChips[] = {"BM1688", "CV186X"};
 
+#elif defined(COSMO_NN_USE_RKNN_BACKEND)
+
+/// Directory prefix for RK3588 model directories: "prod_RK3588_".
+static constexpr const char* kPlatformDirPrefix = "prod_RK3588_";
+
+/// Prefix used when generating new RK3588 model directories.
+static constexpr const char* kNewDirPrefix = "prod_RK3588_";
+
+/// Regex pattern to extract algorithm code from RK3588 model directory names.
+static constexpr const char* kPlatformDirRegex = "prod_[A-Z0-9]+_([0-9]+)_.*";
+
+/// Engine type identifier reported to frontend / device info API.
+static constexpr const char* kEngineType = "RK3588";
+
+/// RKNN model binary file extension.
+static constexpr const char* kModelFileExt = ".rknn";
+
+static constexpr const char* kCompatibleModelFileExts[] = {".rknn"};
+static constexpr const char* kSupportedChips[] = {"RK3588"};
+
 #elif defined(COSMO_NN_USE_CPU_BACKEND)
 
 /// Directory prefix for CPU/x86 backend model directories: "prod_X86_".

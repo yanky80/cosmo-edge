@@ -136,6 +136,14 @@ else()
     set(COSMO_MODEL_GUARD OFF)
 endif()
 
+if(COSMO_NN_USE_RKNN_BACKEND)
+    add_compile_definitions(COSMO_NN_USE_RKNN_BACKEND)
+elseif(COSMO_NN_USE_SOPHON_BACKEND)
+    add_compile_definitions(COSMO_NN_USE_SOPHON_BACKEND)
+else()
+    add_compile_definitions(COSMO_NN_USE_CPU_BACKEND)
+endif()
+
 if(COSMO_MODEL_GUARD)
     # .so is pre-installed in system image at /usr/lib/ or provided in prebuild/
     find_library(MODEL_GUARD_LIB cosmo_model_guard
