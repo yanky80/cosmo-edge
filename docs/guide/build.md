@@ -20,10 +20,11 @@ next:
 
 | 路径 | 用途 | 是否启动服务 | 输出 |
 | --- | --- | --- | --- |
-| `scripts/test_target_platform_profiles.sh` | 验证 `x86` / `sophon` / `rk3588` profile、旧参数兼容和非法组合 | 否 | 临时 CMake 配置目录 |
+| `scripts/test_target_platform_profiles.sh` | 验证 `x86` / `sophon` / `rk3588` / `ascend310p3` profile、旧参数兼容和非法组合 | 否 | 临时 CMake 配置目录 |
 | x86 Docker 开发运行环境 | 首次体验、开发评估、生成 x86 发布包 | 是 | `build_output/` |
 | Sophon 发布包构建 | 生成 aarch64/Sophon 部署包 | 否 | `build_output/` |
 | RK3588 profile 配置 | 校验外部 RK SDK/sysroot | 否 | `build_rk3588/` |
+| Ascend 310P3 profile 配置 | 校验外部 CANN SDK 与系统 FFmpeg | 否 | `build_ascend310p3/` |
 | CPU 测试构建 | 构建 `cosmo-tests` | 否 | `build_cpu/cosmo-tests` |
 
 ## 目标平台 Profile
@@ -31,7 +32,7 @@ next:
 CosmoEdge 现在通过单一参数选择静态构建 profile：
 
 ```bash
--DCOSMO_TARGET_PLATFORM=x86|sophon|rk3588
+-DCOSMO_TARGET_PLATFORM=x86|sophon|rk3588|ascend310p3
 ```
 
 该 profile 统一派生：
@@ -39,7 +40,7 @@ CosmoEdge 现在通过单一参数选择静态构建 profile：
 - 目标架构和 toolchain
 - 推理/媒体后端
 - 编译宏和链接依赖
-- 模型制品元数据（`.onnx`、`.nn` / `.bmodel`、`.rknn`）
+- 模型制品元数据（`.onnx`、`.nn` / `.bmodel`、`.rknn`、`.om`）
 - 默认 `RESOURCE_DIR` 和打包内容
 
 旧的 `COSMO_TARGET_ARCH` 和 CPU/Sophon backend 开关仍可兼容输入，但 CMake 会给出弃用警告，并在冲突时直接失败。
@@ -132,6 +133,27 @@ cmake -S . -B build_rk3588 \
 - `libdrm`、`rockchip_mpp`、FFmpeg 的 `pkg-config` 模块
 
 完整的 RK3588 preview package、部署约束、诊断和板端 benchmark 见 [RK3588 Preview Operations](rk3588-preview)。
+
+## Ascend 310P3 Profile 配置
+
+Ascend 310P3 profile 在 x86_64 主机上构建，配置阶段校验外部 CANN SDK 和系统
+FFmpeg，不向仓库提交 CANN、驱动、固件或定制 FFmpeg 二进制：
+
+```bash
+source /usr/local/Ascend/ascend-toolkit/set_env.sh   # 导出 ASCEND_TOOLKIT_HOME
+cmake -S . -B build_ascend310p3 \
+  -DCOSMO_TARGET_PLATFORM=ascend310p3
+```
+
+配置阶段会检查：
+
+- 主机架构为 x86_64，`libascendcl.so` 为 x86_64 ELF
+- `include/acl/acl.h`、`include/acl/dvpp/hi_dvpp.h`
+- `lib64/libascendcl.so`、`lib64/libacl_dvpp.so`
+- 系统 FFmpeg 头文件与 `libavcodec` 等共享库
+
+CANN 环境初始化使用测试机安装包提供的 `set_env.sh`；测试机软件/媒体基线见
+[310P3 测试主机基线](ascend310p3-test-host-baseline)。
 
 ## CPU 测试构建
 
