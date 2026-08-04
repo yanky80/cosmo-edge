@@ -1,5 +1,16 @@
 # Agent instructions
 
+## Code search
+
+- When exploring or searching this codebase, use the project `code-review-graph`
+  MCP first, especially `get-minimal-context-tool`,
+  `semantic-search-nodes-tool`, `query-graph-tool`, and
+  `traverse-graph-tool`.
+- Use `/home/yanky/work/projects/cosmo-edge` as `repo_root` when calling the
+  MCP tools.
+- Fall back to `rg` or other text search only when the graph MCP is unavailable
+  or does not provide enough detail.
+
 ## RK3588 hardware validation
 
 - The shared RK3588 test host is available with:
@@ -16,3 +27,5 @@
 - Do not store passwords, private keys, tokens, or device-specific secrets in
   the repository. Do not assume passwordless `sudo`.
 - Record the exact board-test commands and relevant results in the pull request.
+
+@/home/yanky/.codex/RTK.md
