@@ -47,15 +47,26 @@ static bool ReadYolo26RawPostParams(const PipelineModelConfig& model_config, con
     if (reg_max != 1 || model_config.outputs.size() != 6)
         return false;
 
+    const int head_dtype = model_config.outputs.front().data_type;
+    if (head_dtype != DATA_TYPE_INT8 && head_dtype != DATA_TYPE_HALF && head_dtype != DATA_TYPE_FLOAT)
+        return false;
+
     output_scales.clear();
     output_zero_points.clear();
     output_scales.reserve(model_config.outputs.size());
     output_zero_points.reserve(model_config.outputs.size());
     for (const auto& output : model_config.outputs) {
-        if (output.data_type != DATA_TYPE_INT8 || output.scale <= 0.0f)
+        // Six heads must share one dtype; only INT8 affine heads carry
+        // scale/zero-point metadata. FP16/FP32 heads are raw logits and
+        // distances and decode without any quant parameters.
+        if (output.data_type != head_dtype)
             return false;
-        output_scales.push_back(output.scale);
-        output_zero_points.push_back(output.zero_point);
+        if (head_dtype == DATA_TYPE_INT8) {
+            if (output.scale <= 0.0f)
+                return false;
+            output_scales.push_back(output.scale);
+            output_zero_points.push_back(output.zero_point);
+        }
     }
     return true;
 }

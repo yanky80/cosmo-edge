@@ -3,12 +3,62 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <limits>
+#include <type_traits>
 
 #include "nn/node/node_type_utils.h"
+#include "nn/utils/data_type_utils.h"
 #include "nn/utils/dims_vector_utils.h"
 #include "nn/utils/op.h"
 
 namespace cosmo::nn {
+
+namespace {
+
+float HalfToFloat(std::uint16_t value) {
+    const std::uint32_t sign = (static_cast<std::uint32_t>(value & 0x8000)) << 16;
+    std::uint32_t exponent   = (value >> 10) & 0x1f;
+    std::uint32_t mantissa   = value & 0x03ff;
+    std::uint32_t bits       = 0;
+
+    if (exponent == 0) {
+        if (mantissa == 0) {
+            bits = sign;
+        } else {
+            exponent = 1;
+            while ((mantissa & 0x0400) == 0) {
+                mantissa <<= 1;
+                exponent--;
+            }
+            mantissa &= 0x03ff;
+            bits = sign | ((exponent + 112) << 23) | (mantissa << 13);
+        }
+    } else if (exponent == 0x1f) {
+        bits = sign | 0x7f800000 | (mantissa << 13);
+    } else {
+        bits = sign | ((exponent + 112) << 23) | (mantissa << 13);
+    }
+
+    float result;
+    std::memcpy(&result, &bits, sizeof(result));
+    return result;
+}
+
+// Reads one head element as float: INT8 heads are affine-dequantized with the
+// per-head scale/zero-point, FP16 heads are widened from half precision, and
+// FP32 heads are already float.
+template <typename T>
+float ReadValue(T value, float scale, int zero_point) {
+    if constexpr (std::is_same_v<T, std::int8_t>)
+        return (static_cast<int>(value) - zero_point) * scale;
+    else if constexpr (std::is_same_v<T, std::uint16_t>)
+        return HalfToFloat(value);
+    else
+        return static_cast<float>(value);
+}
+
+}  // namespace
 
 Yolo26RawDecodeNode::Yolo26RawDecodeNode() : Node() {
     node_type     = NODE_YOLO26_RAW_DECODE;
@@ -47,6 +97,62 @@ size_t Yolo26RawDecodeNode::GetTopCount() {
     return 1;
 }
 
+template <typename T>
+void Yolo26RawDecodeNode::DecodeScale(const T* reg_data, const T* cls_data, int grid_h, int grid_w,
+                                      int stride, int class_count, float reg_scale, int reg_zp,
+                                      float cls_scale, int cls_zp, float cls_threshold,
+                                      std::vector<Detection>& detections) {
+    const int reg_hw = grid_h * grid_w;
+
+    for (int y = 0; y < grid_h; ++y) {
+        for (int x = 0; x < grid_w; ++x) {
+            const int cell_index = y * grid_w + x;
+
+            // reg_max=1 distances are signed: an object edge may lie on
+            // either side of its anchor cell. Clamping would shift the
+            // box, so keep the raw dequantized values like the
+            // reference YOLO26 decode does.
+            const float left   = ReadValue(reg_data[cell_index], reg_scale, reg_zp);
+            const float top    = ReadValue(reg_data[reg_hw + cell_index], reg_scale, reg_zp);
+            const float right  = ReadValue(reg_data[2 * reg_hw + cell_index], reg_scale, reg_zp);
+            const float bottom = ReadValue(reg_data[3 * reg_hw + cell_index], reg_scale, reg_zp);
+
+            const float anchor_x = static_cast<float>(x) + 0.5f;
+            const float anchor_y = static_cast<float>(y) + 0.5f;
+            const float x1       = (anchor_x - left) * stride;
+            const float y1       = (anchor_y - top) * stride;
+            const float x2       = (anchor_x + right) * stride;
+            const float y2       = (anchor_y + bottom) * stride;
+
+            // One candidate per cell: the highest-scoring class,
+            // matching the reference YOLO26 decode. Emitting every
+            // class would change candidate ordering and therefore NMS
+            // tie-breaking for identically-scored cells.
+            int best_class   = 0;
+            float best_value = ReadValue(cls_data[cell_index], cls_scale, cls_zp);
+            for (int class_id = 1; class_id < class_count; ++class_id) {
+                const float value = ReadValue(cls_data[class_id * reg_hw + cell_index], cls_scale, cls_zp);
+                if (value > best_value) {
+                    best_value = value;
+                    best_class = class_id;
+                }
+            }
+            if (best_value <= cls_threshold) {
+                continue;  // Strictly greater, like the reference.
+            }
+
+            Detection candidate;
+            candidate.cx       = (x1 + x2) * 0.5f;
+            candidate.cy       = (y1 + y2) * 0.5f;
+            candidate.w        = std::max(0.0f, x2 - x1);
+            candidate.h        = std::max(0.0f, y2 - y1);
+            candidate.score    = 1.0f / (1.0f + std::exp(-best_value));
+            candidate.class_id = best_class;
+            detections.push_back(candidate);
+        }
+    }
+}
+
 Status Yolo26RawDecodeNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_blobs,
                                     std::vector<std::shared_ptr<Blob>>& top_blobs) {
     timer.Start();
@@ -59,7 +165,8 @@ Status Yolo26RawDecodeNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_b
 
     std::vector<int> strides;
     int class_count = 0;
-    RETURN_ON_FAIL(ValidateBottoms(bottom_blobs, strides, class_count));
+    DataType head_dtype = DATA_TYPE_FLOAT;
+    RETURN_ON_FAIL(ValidateBottoms(bottom_blobs, strides, class_count, head_dtype));
 
     const int batch = bottom_blobs.at(0)->GetBlobDesc().dims.at(0);
     if (batch > max_batch)
@@ -69,11 +176,31 @@ Status Yolo26RawDecodeNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_b
     auto* top_data      = static_cast<float*>(top_blob->GetHandle().base);
     const auto top_rows = top_blob->GetBlobDesc().dims.at(1);
 
-    std::vector<int> cls_thresholds;
+    const bool is_int8 = head_dtype == DATA_TYPE_INT8;
+    // INT8 keeps the affine quantized threshold; FP16/FP32 compare the raw
+    // class logit against logit(confidence_threshold), which is exactly the
+    // dequantized form of the same cutoff.
+    float logit_threshold = -std::numeric_limits<float>::infinity();
+    if (base_conf_ >= 1.0f)
+        logit_threshold = std::numeric_limits<float>::infinity();
+    else if (base_conf_ > 0.0f)
+        logit_threshold = std::log(base_conf_ / (1.0f - base_conf_));
+
+    std::vector<float> cls_thresholds;
     cls_thresholds.reserve(3);
-    for (int scale_index = 0; scale_index < 3; ++scale_index)
-        cls_thresholds.push_back(QuantizeThreshold(base_conf_, output_scales_.at(scale_index * 2 + 1),
-                                                   output_zero_points_.at(scale_index * 2 + 1)));
+    for (int scale_index = 0; scale_index < 3; ++scale_index) {
+        const float cls_scale = is_int8 ? output_scales_.at(scale_index * 2 + 1) : 0.0f;
+        const int cls_zp      = is_int8 ? output_zero_points_.at(scale_index * 2 + 1) : 0;
+        const int cls_thresh  = is_int8 ? QuantizeThreshold(base_conf_, cls_scale, cls_zp) : 0;
+        // (quantized_threshold - zero_point) * scale is the dequantized logit
+        // cutoff; comparing dequantized values against it is exactly
+        // equivalent to comparing the raw INT8 values against the quantized
+        // threshold (scale > 0 makes the affine map order-preserving).
+        cls_thresholds.push_back(is_int8 ? (static_cast<float>(cls_thresh - cls_zp)) * cls_scale
+                                         : logit_threshold);
+    }
+
+    const int element_bytes = DataTypeUtils::GetBytesSize(head_dtype);
 
     for (int batch_index = 0; batch_index < batch; ++batch_index) {
         std::vector<Detection> detections;
@@ -87,61 +214,34 @@ Status Yolo26RawDecodeNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_b
             const int reg_hw     = grid_h * grid_w;
             const int cls_hw     = class_count * reg_hw;
 
-            auto* reg_data = static_cast<std::int8_t*>(reg_blob->GetHandle().base) + batch_index * 4 * reg_hw;
-            auto* cls_data = static_cast<std::int8_t*>(cls_blob->GetHandle().base) + batch_index * cls_hw;
+            const float reg_scale = is_int8 ? output_scales_.at(scale_index * 2) : 0.0f;
+            const int reg_zp      = is_int8 ? output_zero_points_.at(scale_index * 2) : 0;
+            const float cls_scale = is_int8 ? output_scales_.at(scale_index * 2 + 1) : 0.0f;
+            const int cls_zp      = is_int8 ? output_zero_points_.at(scale_index * 2 + 1) : 0;
 
-            const float reg_scale = output_scales_.at(scale_index * 2);
-            const int reg_zp      = output_zero_points_.at(scale_index * 2);
-            const float cls_scale = output_scales_.at(scale_index * 2 + 1);
-            const int cls_zp      = output_zero_points_.at(scale_index * 2 + 1);
-            const int cls_thresh  = cls_thresholds.at(scale_index);
+            auto* reg_base =
+                static_cast<std::uint8_t*>(reg_blob->GetHandle().base) + batch_index * 4 * reg_hw * element_bytes;
+            auto* cls_base =
+                static_cast<std::uint8_t*>(cls_blob->GetHandle().base) + batch_index * cls_hw * element_bytes;
 
-            for (int y = 0; y < grid_h; ++y) {
-                for (int x = 0; x < grid_w; ++x) {
-                    const int cell_index = y * grid_w + x;
-
-                    // reg_max=1 distances are signed: an object edge may lie on
-                    // either side of its anchor cell. Clamping would shift the
-                    // box, so keep the raw dequantized values like the
-                    // reference YOLO26 decode does.
-                    const float left   = Dequantize(reg_data[cell_index], reg_scale, reg_zp);
-                    const float top    = Dequantize(reg_data[reg_hw + cell_index], reg_scale, reg_zp);
-                    const float right  = Dequantize(reg_data[2 * reg_hw + cell_index], reg_scale, reg_zp);
-                    const float bottom = Dequantize(reg_data[3 * reg_hw + cell_index], reg_scale, reg_zp);
-
-                    const float anchor_x = static_cast<float>(x) + 0.5f;
-                    const float anchor_y = static_cast<float>(y) + 0.5f;
-                    const float x1       = (anchor_x - left) * stride;
-                    const float y1       = (anchor_y - top) * stride;
-                    const float x2       = (anchor_x + right) * stride;
-                    const float y2       = (anchor_y + bottom) * stride;
-
-                    // One candidate per cell: the highest-scoring class,
-                    // matching the reference YOLO26 decode. Emitting every
-                    // class would change candidate ordering and therefore NMS
-                    // tie-breaking for identically-scored cells.
-                    int best_class         = 0;
-                    std::int8_t best_value = cls_data[cell_index];
-                    for (int class_id = 1; class_id < class_count; ++class_id) {
-                        const std::int8_t value = cls_data[class_id * reg_hw + cell_index];
-                        if (value > best_value) {
-                            best_value = value;
-                            best_class = class_id;
-                        }
-                    }
-                    if (best_value <= cls_thresh) {
-                        continue;  // Strictly greater, like the reference.
-                    }
-
-                    Detection candidate;
-                    candidate.cx       = (x1 + x2) * 0.5f;
-                    candidate.cy       = (y1 + y2) * 0.5f;
-                    candidate.w        = std::max(0.0f, x2 - x1);
-                    candidate.h        = std::max(0.0f, y2 - y1);
-                    candidate.score    = Sigmoid(Dequantize(best_value, cls_scale, cls_zp));
-                    candidate.class_id = best_class;
-                    detections.push_back(candidate);
-                }
+            switch (head_dtype) {
+                case DATA_TYPE_INT8:
+                    DecodeScale(reinterpret_cast<const std::int8_t*>(reg_base),
+                                reinterpret_cast<const std::int8_t*>(cls_base), grid_h, grid_w, stride,
+                                class_count, reg_scale, reg_zp, cls_scale, cls_zp,
+                                cls_thresholds.at(scale_index), detections);
+                    break;
+                case DATA_TYPE_HALF:
+                    DecodeScale(reinterpret_cast<const std::uint16_t*>(reg_base),
+                                reinterpret_cast<const std::uint16_t*>(cls_base), grid_h, grid_w, stride,
+                                class_count, reg_scale, reg_zp, cls_scale, cls_zp,
+                                cls_thresholds.at(scale_index), detections);
+                    break;
+                default:
+                    DecodeScale(reinterpret_cast<const float*>(reg_base), reinterpret_cast<const float*>(cls_base),
+                                grid_h, grid_w, stride, class_count, reg_scale, reg_zp, cls_scale, cls_zp,
+                                cls_thresholds.at(scale_index), detections);
+                    break;
             }
         }
 
@@ -195,15 +295,23 @@ void Yolo26RawDecodeNode::ResetTopBlob(std::shared_ptr<Blob> top_blob) {
 }
 
 Status Yolo26RawDecodeNode::ValidateBottoms(const std::vector<std::shared_ptr<Blob>>& bottom_blobs,
-                                            std::vector<int>& strides, int& class_count) {
+                                            std::vector<int>& strides, int& class_count,
+                                            DataType& head_dtype) {
     if (reg_max_ != 1)
         return Status(COSMO_NN_ERR_INVALID_INPUT, "yolo26_raw requires reg_max=1");
     if (bottom_blobs.size() != 6)
         return Status(COSMO_NN_ERR_INVALID_INPUT, "yolo26_raw expects six output heads");
-    if (output_scales_.size() != 6 || output_zero_points_.size() != 6)
-        return Status(COSMO_NN_ERR_INVALID_INPUT, "yolo26_raw quant metadata must describe six outputs");
     if (input_width_ <= 0 || input_height_ <= 0)
         return Status(COSMO_NN_ERR_INVALID_INPUT, "yolo26_raw input_size must be positive");
+
+    head_dtype = bottom_blobs.at(0)->GetBlobDesc().data_type;
+    if (head_dtype != DATA_TYPE_INT8 && head_dtype != DATA_TYPE_HALF && head_dtype != DATA_TYPE_FLOAT)
+        return Status(COSMO_NN_ERR_INVALID_INPUT,
+                      "yolo26_raw head 0 dtype must be INT8, FP16 (HALF), or FP32 (FLOAT); got " +
+                          DataTypeUtils::GetDataTypeString(head_dtype));
+    if (head_dtype == DATA_TYPE_INT8 && (output_scales_.size() != 6 || output_zero_points_.size() != 6))
+        return Status(COSMO_NN_ERR_INVALID_INPUT,
+                      "yolo26_raw INT8 heads require scale and zero-point metadata for all six outputs");
 
     const int batch = bottom_blobs.at(0)->GetBlobDesc().dims.at(0);
     strides.clear();
@@ -215,8 +323,10 @@ Status Yolo26RawDecodeNode::ValidateBottoms(const std::vector<std::shared_ptr<Bl
         const auto reg_desc  = reg_blob->GetBlobDesc();
         const auto cls_desc  = cls_blob->GetBlobDesc();
 
-        if (reg_desc.data_type != DATA_TYPE_INT8 || cls_desc.data_type != DATA_TYPE_INT8)
-            return Status(COSMO_NN_ERR_INVALID_INPUT, "yolo26_raw outputs must be INT8");
+        if (reg_desc.data_type != head_dtype || cls_desc.data_type != head_dtype)
+            return Status(COSMO_NN_ERR_INVALID_INPUT,
+                          "yolo26_raw head " + std::to_string(scale_index * 2) +
+                              " dtype differs from head 0; all six heads must share one dtype");
         if (reg_desc.dims.size() != 4 || cls_desc.dims.size() != 4)
             return Status(COSMO_NN_ERR_INVALID_INPUT, "yolo26_raw outputs must be NCHW tensors");
         if (reg_desc.dims.at(0) != batch || cls_desc.dims.at(0) != batch)
@@ -270,14 +380,6 @@ float Yolo26RawDecodeNode::IoU(const Detection& lhs, const Detection& rhs) const
     if (union_area <= 0.0f)
         return 0.0f;
     return intersection / union_area;
-}
-
-float Yolo26RawDecodeNode::Sigmoid(float value) const {
-    return 1.0f / (1.0f + std::exp(-value));
-}
-
-float Yolo26RawDecodeNode::Dequantize(std::int8_t value, float scale, int zero_point) const {
-    return (static_cast<int>(value) - zero_point) * scale;
 }
 
 int Yolo26RawDecodeNode::QuantizeThreshold(float threshold, float scale, int zero_point) const {
