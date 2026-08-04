@@ -438,4 +438,108 @@ TEST_CASE("YOLO26 raw decode rejects mixed, unsupported, and inconsistent heads"
     REQUIRE(count_status != cosmo::nn::COSMO_NN_OK);
 }
 
+TEST_CASE("YOLO26 raw decode rejects non-NCHW heads", "[nn][yolo26][postprocess]") {
+    auto node = cosmo::nn::NodeTypeUtils::CreateNode(
+        cosmo::nn::NodeTypeUtils::NodeTypeFromStr("yolo26_raw_postprocess"), 0, 1, cosmo::nn::DEVICE_CPU);
+    REQUIRE(node != nullptr);
+
+    auto op                = std::make_unique<cosmo::nn::Yolo26RawPost>("yolo26_raw_postprocess");
+    op->input_width        = 640;
+    op->input_height       = 640;
+    op->nms_detection_conf = 0.25f;
+    op->nms_threshold      = 0.45f;
+    op->top_k              = 300;
+    op->reg_max            = 1;
+    node->LoadParam(op.get());
+    auto infer_status = node->InferTopShapes();
+    REQUIRE(infer_status == cosmo::nn::COSMO_NN_OK);
+
+    auto cls0 = MakeBlob(cosmo::nn::DATA_TYPE_HALF, {1, 1, 80, 80});
+    cls0->GetBlobDesc().data_format = cosmo::nn::DATA_FORMAT_NHWC;
+
+    std::vector<std::shared_ptr<cosmo::nn::Blob>> bottoms{
+        MakeBlob(cosmo::nn::DATA_TYPE_HALF, {1, 4, 80, 80}),
+        cls0,
+        MakeBlob(cosmo::nn::DATA_TYPE_HALF, {1, 4, 40, 40}),
+        MakeBlob(cosmo::nn::DATA_TYPE_HALF, {1, 1, 40, 40}),
+        MakeBlob(cosmo::nn::DATA_TYPE_HALF, {1, 4, 20, 20}),
+        MakeBlob(cosmo::nn::DATA_TYPE_HALF, {1, 1, 20, 20}),
+    };
+    std::vector<std::shared_ptr<cosmo::nn::Blob>> tops{MakeBlob(cosmo::nn::DATA_TYPE_FLOAT, {1, 300, 6})};
+
+    auto status = node->Forward(bottoms, tops);
+    REQUIRE(status != cosmo::nn::COSMO_NN_OK);
+}
+
+TEST_CASE("YOLO26 raw decode skips non-finite FP16 logits and distances", "[nn][yolo26][postprocess]") {
+    auto node = cosmo::nn::NodeTypeUtils::CreateNode(
+        cosmo::nn::NodeTypeUtils::NodeTypeFromStr("yolo26_raw_postprocess"), 0, 1, cosmo::nn::DEVICE_CPU);
+    REQUIRE(node != nullptr);
+
+    auto op                = std::make_unique<cosmo::nn::Yolo26RawPost>("yolo26_raw_postprocess");
+    op->input_width        = 640;
+    op->input_height       = 640;
+    op->nms_detection_conf = 0.25f;
+    op->nms_threshold      = 0.45f;
+    op->top_k              = 300;
+    op->reg_max            = 1;
+    node->LoadParam(op.get());
+    auto infer_status = node->InferTopShapes();
+    REQUIRE(infer_status == cosmo::nn::COSMO_NN_OK);
+
+    auto reg0 = MakeHalfBlob({1, 4, 80, 80});
+    auto cls0 = MakeHalfBlob({1, 1, 80, 80});
+    auto reg1 = MakeHalfBlob({1, 4, 40, 40});
+    auto cls1 = MakeHalfBlob({1, 1, 40, 40});
+    auto reg2 = MakeHalfBlob({1, 4, 20, 20});
+    auto cls2 = MakeHalfBlob({1, 1, 20, 20});
+    FillHalf(reg0, 0.0f);
+    FillHalf(cls0, -2.0f);
+    FillHalf(reg1, 0.0f);
+    FillHalf(cls1, -2.0f);
+    FillHalf(reg2, 0.0f);
+    FillHalf(cls2, -2.0f);
+
+    // Cell (0,0): FP16 quiet-NaN class logit (0x7e00) must be skipped.
+    static_cast<std::uint16_t*>(cls0->GetHandle().base)[0] = 0x7e00u;
+    // Cell (0,1): +Inf left distance (0x7c00) would produce a NaN box; skipped.
+    static_cast<std::uint16_t*>(reg0->GetHandle().base)[1] = 0x7c00u;
+    SetHalf(cls0, 0, 0, 1, 2.0f);
+    // Cell (1,1): valid candidate survives: cx=12, cy=12, w=16, h=16.
+    const float reg_a[4] = {1, 1, 1, 1};
+    for (int channel = 0; channel < 4; ++channel)
+        SetHalf(reg0, channel, 1, 1, reg_a[channel]);
+    SetHalf(cls0, 0, 1, 1, 2.0f);
+
+    std::vector<std::shared_ptr<cosmo::nn::Blob>> bottoms{
+        reg0,
+        cls0,
+        reg1,
+        cls1,
+        reg2,
+        cls2,
+    };
+    std::vector<std::shared_ptr<cosmo::nn::Blob>> tops{MakeBlob(cosmo::nn::DATA_TYPE_FLOAT, {1, 300, 6})};
+
+    auto status = node->Forward(bottoms, tops);
+    REQUIRE(status == cosmo::nn::COSMO_NN_OK);
+
+    const auto* decoded = static_cast<const float*>(tops[0]->GetHandle().base);
+    CHECK(decoded[0 * 6 + 4] == Approx(0.880797f).epsilon(1e-5f));
+    CHECK(decoded[0 * 6 + 5] == 0.0f);
+    CHECK(decoded[0 * 6 + 0] == 12.0f);
+    CHECK(decoded[0 * 6 + 1] == 12.0f);
+    CHECK(decoded[0 * 6 + 2] == 16.0f);
+    CHECK(decoded[0 * 6 + 3] == 16.0f);
+    // Only one candidate survives; the remaining top-k rows stay zeroed.
+    for (int index = 1; index < 6; ++index) {
+        CHECK(decoded[index * 6 + 0] == 0.0f);
+        CHECK(decoded[index * 6 + 1] == 0.0f);
+        CHECK(decoded[index * 6 + 2] == 0.0f);
+        CHECK(decoded[index * 6 + 3] == 0.0f);
+        CHECK(decoded[index * 6 + 4] == 0.0f);
+        CHECK(decoded[index * 6 + 5] == 0.0f);
+    }
+}
+
 #endif  // COSMO_NN_USE_CPU_BACKEND

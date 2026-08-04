@@ -137,6 +137,14 @@ void Yolo26RawDecodeNode::DecodeScale(const T* reg_data, const T* cls_data, int 
                     best_class = class_id;
                 }
             }
+            // FP16/FP32 heads can carry NaN/Inf on degenerate inputs; a NaN
+            // score would break the strict-weak-ordering of std::sort and NaN
+            // boxes would poison NMS, so skip non-finite cells. INT8 values
+            // are always finite and this guard is a no-op there.
+            if (!std::isfinite(best_value) || !std::isfinite(left) || !std::isfinite(top) ||
+                !std::isfinite(right) || !std::isfinite(bottom)) {
+                continue;
+            }
             if (best_value <= cls_threshold) {
                 continue;  // Strictly greater, like the reference.
             }
@@ -329,6 +337,8 @@ Status Yolo26RawDecodeNode::ValidateBottoms(const std::vector<std::shared_ptr<Bl
                               " dtype differs from head 0; all six heads must share one dtype");
         if (reg_desc.dims.size() != 4 || cls_desc.dims.size() != 4)
             return Status(COSMO_NN_ERR_INVALID_INPUT, "yolo26_raw outputs must be NCHW tensors");
+        if (reg_desc.data_format != DATA_FORMAT_NCHW || cls_desc.data_format != DATA_FORMAT_NCHW)
+            return Status(COSMO_NN_ERR_INVALID_INPUT, "yolo26_raw heads must use NCHW layout");
         if (reg_desc.dims.at(0) != batch || cls_desc.dims.at(0) != batch)
             return Status(COSMO_NN_ERR_INVALID_INPUT, "yolo26_raw batch mismatch across outputs");
         if (reg_desc.dims.at(1) != 4)
