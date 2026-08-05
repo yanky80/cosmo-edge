@@ -59,7 +59,7 @@ tensor-memory zero-copy. A failure is preferable to silently changing paths.
 
 ## Board check and benchmark
 
-Run the checks in [`docs/benchmarks/rk3588-preview/README.md`](../benchmarks/rk3588-preview/)
+Run the checks in [`docs/benchmarks/rk3588-preview/README.md`](../benchmarks/rk3588-preview/README)
 under the shared `flock` lock. Record board identity, fixed model/video,
 decode/RGA/RKNN/postprocess status, end-to-end throughput, memory sampling,
 and the 1/3-instance result. The report has no FPS gate.

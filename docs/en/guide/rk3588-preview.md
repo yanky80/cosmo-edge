@@ -36,7 +36,7 @@ and affine-quantization checks. The smoke proves no software fallback by
 requiring `*_rkmpp`, `DRM_PRIME` DMA-BUF output, device-node access, and RGA
 destination fd equal to the RKNN input fd.
 
-Use [`docs/benchmarks/rk3588-preview/README.md`](../../benchmarks/rk3588-preview/)
+Use [`docs/benchmarks/rk3588-preview/README.md`](../../benchmarks/rk3588-preview/README)
 for the locked board procedure and reproducible 1/3-instance report. It
 records decode, RGA, RKNN, postprocess, end-to-end throughput, and memory
 fields without an FPS pass/fail gate. Release verification also runs unchanged

@@ -44,7 +44,14 @@ int UsbDemuxStrategy::ParseUsbTier(const std::string& usbPath) const {
 
 util::ErrorEnum UsbDemuxStrategy::OpenInput(AVFormatContext*& fmt_ctx, const std::string& filename) {
     avdevice_register_all();
+#if LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(59, 16, 100)
+    // av_find_input_format/avformat_open_input are const-correct since FFmpeg
+    // 5.1 (libavformat 59.16); the prebuild FFmpeg 4.x toolchain uses the
+    // non-const signatures.
     const AVInputFormat* inputFmt = av_find_input_format("v4l2");
+#else
+    AVInputFormat* inputFmt = av_find_input_format("v4l2");
+#endif
     if (!inputFmt) {
         LOG_WARN("{}Open {} v4l2 input format not found", kTag, filename);
         return util::ErrorEnum::DemuxOpenStreamFail;

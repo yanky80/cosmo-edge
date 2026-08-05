@@ -36,6 +36,7 @@
 
 #ifdef COSMO_NN_USE_ASCEND_BACKEND
 #include "acl/acl.h"
+#include "nn/device/ascend/ascend_acl.h"
 #endif
 
 namespace cosmo::service {
@@ -431,16 +432,13 @@ namespace {
             return tensor;
         };
 
-        if (const aclError init_ret = aclInit(nullptr); init_ret != ACL_SUCCESS) {
+        if (const aclError init_ret = cosmo::nn::ascend::EnsureAclInitialized();
+            init_ret != ACL_SUCCESS) {
             error =
-                "stage=ascend-open artifact=" + artifact_path + " aclInit ret=" + std::to_string(init_ret);
+                "stage=ascend-open artifact=" + artifact_path +
+                " aclInit ret=" + std::to_string(init_ret);
             return false;
         }
-        struct AclSessionGuard {
-            ~AclSessionGuard() {
-                (void)aclFinalize();
-            }
-        } session_guard;
 
         if (const aclError set_ret = aclrtSetDevice(kAscendDeviceId); set_ret != ACL_SUCCESS) {
             error = "stage=ascend-open artifact=" + artifact_path +
