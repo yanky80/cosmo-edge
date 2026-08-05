@@ -230,7 +230,7 @@ output: output0, [1, 300, 6], ND FP16（end2end：x1,y1,x2,y2,score,class_id）
 ```
 
 包内只允许一个显式 `.om` 制品。导入时通过 AscendCL metadata 校验一个固定 batch-1
-输入、一个输出、shape、ND/NCHW format 与 FP16 dtype（`data_type` 2 = HALF）。
+输入、一个输出、固定 shape `[1,300,6]`、ND format 与 FP16 dtype（`data_type` 2 = HALF）。
 
 ## FP16 raw 后处理
 

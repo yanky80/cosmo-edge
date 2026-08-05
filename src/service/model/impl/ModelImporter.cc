@@ -663,13 +663,14 @@ bool ModelImportExporter::ValidateModelPackageContract(const std::string& config
 
         const auto& output_cfg  = model["outputs"][0];
         const auto output_shape = ReadShape(output_cfg);
-        const bool output_ok    = output_cfg.value("data_type", -1) == kConfigDataTypeFp16 &&
-                               output_shape.size() == 3 && output_shape[0] == 1 && output_shape[1] > 0 &&
-                               output_shape[2] == 6;
+        // Fixed-shape end2end contract (docs/development/ascend310p3-yolo26-om-atc.md):
+        // rows are x1,y1,x2,y2,score,class_id, capped at max_det=300 by the NMS head.
+        const bool output_ok = output_cfg.value("data_type", -1) == kConfigDataTypeFp16 &&
+                               output_shape == std::vector<int>{1, 300, 6};
         if (!output_ok) {
             error = MakeValidationError(
                 "config", config_path, model_dir,
-                "ASCEND310P3 YOLO26 output must be FP16 [1,N,6] end2end tensor: " +
+                "ASCEND310P3 YOLO26 output must be FP16 [1,300,6] end2end tensor: " +
                     DescribeConfigTensor(output_cfg));
             return false;
         }

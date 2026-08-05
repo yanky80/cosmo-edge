@@ -747,7 +747,12 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
                  config["models"][0]["outputs"][0]["data_type"] = 0;
              },
              "stage=config"},
-            {"bad output shape",
+            {"bad output row count",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["outputs"][0]["shape"] = {1, 100, 6};
+             },
+             "stage=config"},
+            {"bad output column count",
              [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
                  config["models"][0]["outputs"][0]["shape"] = {1, 300, 7};
              },
