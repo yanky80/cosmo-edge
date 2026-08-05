@@ -371,6 +371,17 @@ namespace pipeline_utils {
         return op;
     }
 
+    std::unique_ptr<YoloPost> MakeYolo26UltralyticsPostOp(float nms_threshold, float conf_threshold,
+                                                          int top_k, int input_width, int input_height) {
+        auto op                = std::make_unique<YoloPost>("yolo26_ultralytics_postprocess");
+        op->nms_threshold      = nms_threshold;
+        op->nms_detection_conf = conf_threshold;
+        op->top_k              = top_k;
+        op->input_width        = input_width;
+        op->input_height       = input_height;
+        return op;
+    }
+
     std::unique_ptr<ImageToTensor> MakeImageToTensorOp(int input_width, int input_height,
                                                        const std::vector<int>& padding_color) {
         auto op              = std::make_unique<ImageToTensor>("image_to_tensor");

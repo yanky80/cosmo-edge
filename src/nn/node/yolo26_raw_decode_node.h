@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "nn/core/common.h"
 #include "nn/node/node.h"
 
 namespace cosmo::nn {
@@ -31,10 +32,12 @@ private:
 
     void ResetTopBlob(std::shared_ptr<Blob> top_blob);
     Status ValidateBottoms(const std::vector<std::shared_ptr<Blob>>& bottom_blobs,
-                           std::vector<int>& strides, int& class_count);
+                           std::vector<int>& strides, int& class_count, DataType& head_dtype);
+    template <typename T>
+    static void DecodeScale(const T* reg_data, const T* cls_data, int grid_h, int grid_w, int stride,
+                            int class_count, float reg_scale, int reg_zp, float cls_scale, int cls_zp,
+                            float cls_threshold, std::vector<Detection>& detections);
     float IoU(const Detection& lhs, const Detection& rhs) const;
-    float Sigmoid(float value) const;
-    float Dequantize(std::int8_t value, float scale, int zero_point) const;
     int QuantizeThreshold(float threshold, float scale, int zero_point) const;
 
     float nms_threshold_ = 0.45f;
