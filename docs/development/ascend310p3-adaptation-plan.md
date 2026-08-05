@@ -286,6 +286,14 @@ output layout: NCHW
 - 真实推理冒烟（`aclmdlLoadFromFile` + `aclmdlExecute`）：相机帧 1280x720 letterbox 到 960x960（RGB、/255）→ 检出 2 个框：`cls=3 铲车 score=0.9517`、`cls=1 混凝土罐车 score=0.2510`；输出结构与仓库现有 `yolo_e2e_postprocess` 路径（消费 [1,300,6]）匹配。
 - 结论：该 OM 证明 310P3 设备推理链路可用，但不能验证 Issue #27 的六路 FP16 raw-head host 解码——端到端输出绕开了本 issue 实现的解码。Issue #27 端到端验收需要 `nms=False` 且 reg/cls 分离的六路 raw-head OM 导出；当前目录无此制品，验证程序已留档在真机 `/tmp/om_probe.c`、`/tmp/om_run.c`，待 raw-head OM 就绪后执行。
 
+#### raw-head 导出复测（2026-08-05，`end2end: false` + `nms: false`）
+
+- 模型重新生成：`/opt/convert/cam_p2_distill_ascend_model/best_Ascend310P3.om`（7332985 B，metadata 为 `end2end: false, nms: false, quantize: 16`）。
+- 探测契约：input `FP32 NCHW [1,3,960,960]`；output `FP32 ND [1,10,76500]`（4 尺度 240²/120²/60²/30² × 10 通道）。
+- 值分析（同相机帧推理，dump 为 `/tmp/out_raw.raw`）：每 cell 10 通道 = `[cx, cy, w, h, 6 个 class score]`，class 通道为 sigmoid 激活后的分数 ∈ (0,1)；与端到端模型检出框一致（s32 cell (16,5) 的 `[162.1, 532.0, 176.8, 134.5]` + class3 0.9795 ≈ E2E 铲车 `[cx=161.5, cy=530.5, w=179.5, h=134]`）。
+- 临时 harness（未入库）把 [1,10,76500] 拆成 6 个头喂 `yolo26_raw_postprocess`：产出 160 个假检测（框坐标超出画幅）——解码器按 raw logits/距离处理，而图内已完成 dist2bbox + class sigmoid。
+- 结论：即使 `end2end: false` + `nms: false`，当前蒸馏/Detect 头导出仍把 bbox 解码与 class sigmoid 固化进图，输出不是 raw logits/distances，不符合六路 raw-head 契约。Issue #27 验收需要导出真正未解码的 raw head：每尺度分开的 reg（[1,4,H,W]，reg_max=1 距离）与 cls（[1,6,H,W]，logits）共 6 个 NCHW 张量；验证程序留档在真机 `/tmp/om_probe.c`、`/tmp/om_run.c`，raw-head OM 就绪后即可跑通。
+
 RK3588 板回归：未执行。原 INT8 affine 路径由本地 `[yolo26]` INT8 用例覆盖且全绿；板端 SDK 缺少可用的 `librknnrt` sysroot，完整板端构建成本高，留给 RK3588 专项验证。
 
 用固定视频比较前 100 个有效帧与 ONNX FP32 基线：
