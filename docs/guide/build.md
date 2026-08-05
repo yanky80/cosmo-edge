@@ -178,7 +178,7 @@ FFmpeg 查找顺序：
 3. 系统 FFmpeg 开发包（按 `CMAKE_LIBRARY_ARCHITECTURE` 多架构路径回退）
 
 CANN 环境初始化使用测试机安装包提供的 `set_env.sh`；测试机软件/媒体基线见
-[310P3 测试主机基线](ascend310p3-test-host-baseline)。aarch64 部署基线（CANN
+[310P3 测试主机基线](../development/ascend310p3-test-host-baseline)。aarch64 部署基线（CANN
 aarch64、定制 FFmpeg aarch64 路径、驱动/固件版本）见该文档的
 「aarch64 部署基线（占位）」一节，待 aarch64 真机复采后更新。
 

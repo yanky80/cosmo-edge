@@ -186,7 +186,7 @@ FFmpeg lookup order:
 
 CANN environment initialization stays with the vendor-provided `set_env.sh`;
 the locked test-host software and media baseline is recorded in
-[Ascend 310P3 Test-Host Baseline](../development/ascend310p3-test-host-baseline).
+[Ascend 310P3 Test-Host Baseline](../../development/ascend310p3-test-host-baseline).
 The aarch64 deployment baseline (aarch64 CANN, custom FFmpeg aarch64 path,
 driver/firmware versions) lives in that document's 「aarch64 部署基线（占位）」
 section until real-device collection.
