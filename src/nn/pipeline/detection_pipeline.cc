@@ -372,6 +372,12 @@ Status Yolo26DetPipeline::Init(const PipelineConfig& config, const std::string& 
                     output.op = pipeline_utils::MakeYolo26RawPostOp(nms_thresh, conf_thresh, top_k, reg_max,
                                                                     e2e_input_w, e2e_input_h,
                                                                     output_scales, output_zero_points);
+                } else if (output_format == "yolo26_ultralytics") {
+                    // Ultralytics-exported single output [1, 4+nc, N] with
+                    // dist2bbox + class sigmoid baked into the graph; the host
+                    // only runs NMS/top-k/letterbox recovery.
+                    output.op = pipeline_utils::MakeYolo26UltralyticsPostOp(nms_thresh, conf_thresh, top_k,
+                                                                            e2e_input_w, e2e_input_h);
                 } else {
                     output.op =
                         pipeline_utils::MakeYoloE2EPostOp(conf_thresh, top_k, e2e_input_w, e2e_input_h);
