@@ -20,10 +20,11 @@ This page documents build paths that are confirmed and available in the reposito
 
 | Target | Entry Point | Notes |
 | --- | --- | --- |
-| Target-platform profile validation | `bash scripts/test_target_platform_profiles.sh` | Verifies `x86`, `sophon`, `rk3588`, legacy compatibility, and invalid combinations at CMake configure time. |
+| Target-platform profile validation | `bash scripts/test_target_platform_profiles.sh` | Verifies `x86`, `sophon`, `rk3588`, `ascend310p3`, legacy compatibility, and invalid combinations at CMake configure time. |
 | x86 Docker runtime | `docker-compose.x86.yml` / `docker-compose.x86.windows.yml` | Starts the containerized development/runtime environment. |
 | Sophon release package | `docker compose -f docker-compose.sophon.yml run --rm cosmo-sophon-package` | Creates the target-device release package. |
 | RK3588 profile configure | `cmake -S . -B build_rk3588 -DCOSMO_TARGET_PLATFORM=rk3588 ...` | Validates an external RK SDK/sysroot without committing vendor binaries. |
+| Ascend 310P3 profile configure | `cmake -S . -B build_ascend310p3 -DCOSMO_TARGET_PLATFORM=ascend310p3 ...` | Validates the external CANN SDK and system FFmpeg at configure time. |
 | CPU test build | `scripts/build_cpu_test.sh` | Builds `cosmo-tests` for x86 CPU validation. |
 | Documentation site | `npm ci` and `npm run docs:build` | Builds this VitePress site. |
 
@@ -32,7 +33,7 @@ This page documents build paths that are confirmed and available in the reposito
 CosmoEdge now selects one static build profile with:
 
 ```bash
--DCOSMO_TARGET_PLATFORM=x86|sophon|rk3588
+-DCOSMO_TARGET_PLATFORM=x86|sophon|rk3588|ascend310p3
 ```
 
 The profile derives:
@@ -133,6 +134,31 @@ Configure-time checks cover:
 - required `pkg-config` modules for `libdrm`, `rockchip_mpp`, and FFmpeg
 
 See the [RK3588 Preview Operations](rk3588-preview) guide for the package, runtime/device requirements, zero-copy boundary, diagnostics, and board benchmark.
+
+## Ascend 310P3 Profile Configure
+
+The Ascend 310P3 profile builds on an x86_64 host and validates the external
+CANN toolkit and the custom Ascend FFmpeg (`/opt/ffmpeg-4.4.1/ascend`,
+falling back to system FFmpeg) at configure time. No CANN, driver, firmware,
+or custom FFmpeg binaries are committed to the repository.
+
+```bash
+source /usr/local/Ascend/ascend-toolkit/set_env.sh   # exports ASCEND_TOOLKIT_HOME
+cmake -S . -B build_ascend310p3 \
+  -DCOSMO_TARGET_PLATFORM=ascend310p3
+```
+
+Configure-time checks cover:
+
+- an x86_64 host and an x86_64 `libascendcl.so`
+- `include/acl/acl.h` and `include/acl/dvpp/hi_dvpp.h`
+- `lib64/libascendcl.so` and `lib64/libacl_dvpp.so`
+- custom Ascend FFmpeg (`h264_ascend`/`h265_ascend`) or system FFmpeg headers
+  and shared libraries
+
+CANN environment initialization stays with the vendor-provided `set_env.sh`;
+the locked test-host software and media baseline is recorded in
+[Ascend 310P3 Test-Host Baseline](../development/ascend310p3-test-host-baseline).
 
 ## CPU Test Build
 
