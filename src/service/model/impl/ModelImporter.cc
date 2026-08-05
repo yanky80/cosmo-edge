@@ -625,15 +625,9 @@ bool ModelImportExporter::ValidateModelPackageContract(const std::string& config
                 "ASCEND310P3 YOLO26 package requires params.preprocess_mode=image_to_tensor");
             return false;
         }
-        if (params.value("output_format", std::string()) != "yolo26_raw") {
-            error =
-                MakeValidationError("config", config_path, model_dir,
-                                    "ASCEND310P3 YOLO26 package requires params.output_format=yolo26_raw");
-            return false;
-        }
-        if (params.value("reg_max", 1) != 1) {
+        if (params.value("output_format", std::string()) != "yolo_e2e") {
             error = MakeValidationError("config", config_path, model_dir,
-                                        "ASCEND310P3 YOLO26 package requires reg_max=1");
+                                        "ASCEND310P3 YOLO26 package requires params.output_format=yolo_e2e");
             return false;
         }
         if (!params.contains("input_size") || !params["input_size"].is_array() ||
@@ -648,10 +642,9 @@ bool ModelImportExporter::ValidateModelPackageContract(const std::string& config
                                         "ASCEND310P3 YOLO26 package must declare one NCHW FP16 input tensor");
             return false;
         }
-        if (!model.contains("outputs") || !model["outputs"].is_array() || model["outputs"].size() != 6) {
-            error =
-                MakeValidationError("config", config_path, model_dir,
-                                    "ASCEND310P3 YOLO26 package must declare six NCHW FP16 output tensors");
+        if (!model.contains("outputs") || !model["outputs"].is_array() || model["outputs"].size() != 1) {
+            error = MakeValidationError("config", config_path, model_dir,
+                                        "ASCEND310P3 YOLO26 package must declare one FP16 output tensor");
             return false;
         }
 
@@ -668,49 +661,17 @@ bool ModelImportExporter::ValidateModelPackageContract(const std::string& config
             return false;
         }
 
-        static const std::array<const char*, 6> kAscendOutputNames = {"reg0", "cls0", "reg1",
-                                                                      "cls1", "reg2", "cls2"};
-        int class_count                                            = -1;
-        for (std::size_t index = 0; index < model["outputs"].size(); index += 2) {
-            const auto& reg_cfg = model["outputs"][index];
-            const auto& cls_cfg = model["outputs"][index + 1];
-            if (reg_cfg.value("name", std::string()) != kAscendOutputNames[index] ||
-                cls_cfg.value("name", std::string()) != kAscendOutputNames[index + 1]) {
-                error = MakeValidationError(
-                    "config", config_path, model_dir,
-                    "ASCEND310P3 YOLO26 outputs must be ordered reg0,cls0,reg1,cls1,reg2,cls2: " +
-                        DescribeConfigTensor(reg_cfg) + " | " + DescribeConfigTensor(cls_cfg));
-                return false;
-            }
-            const auto reg_shape = ReadShape(reg_cfg);
-            const auto cls_shape = ReadShape(cls_cfg);
-            const bool reg_ok    = reg_cfg.value("data_type", -1) == kConfigDataTypeFp16 &&
-                                reg_shape.size() == 4 && reg_shape[0] == 1 && reg_shape[1] == 4 &&
-                                reg_shape[2] > 0 && reg_shape[3] > 0;
-            const bool cls_ok = cls_cfg.value("data_type", -1) == kConfigDataTypeFp16 &&
-                                cls_shape.size() == 4 && cls_shape[0] == 1 && cls_shape[1] > 0 &&
-                                cls_shape[2] == reg_shape[2] && cls_shape[3] == reg_shape[3];
-            if (!reg_ok || !cls_ok) {
-                error = MakeValidationError(
-                    "config", config_path, model_dir,
-                    "invalid ASCEND310P3 YOLO26 output pair: " + DescribeConfigTensor(reg_cfg) + " | " +
-                        DescribeConfigTensor(cls_cfg));
-                return false;
-            }
-            if (input_h % reg_shape[2] != 0 || input_w % reg_shape[3] != 0 ||
-                input_h / reg_shape[2] != input_w / reg_shape[3]) {
-                error = MakeValidationError("config", config_path, model_dir,
-                                            "output feature map does not divide input_size cleanly: " +
-                                                DescribeConfigTensor(reg_cfg));
-                return false;
-            }
-            if (class_count == -1)
-                class_count = cls_shape[1];
-            else if (class_count != cls_shape[1]) {
-                error = MakeValidationError("config", config_path, model_dir,
-                                            "output class channels must match across scales");
-                return false;
-            }
+        const auto& output_cfg  = model["outputs"][0];
+        const auto output_shape = ReadShape(output_cfg);
+        const bool output_ok    = output_cfg.value("data_type", -1) == kConfigDataTypeFp16 &&
+                               output_shape.size() == 3 && output_shape[0] == 1 && output_shape[1] > 0 &&
+                               output_shape[2] == 6;
+        if (!output_ok) {
+            error = MakeValidationError(
+                "config", config_path, model_dir,
+                "ASCEND310P3 YOLO26 output must be FP16 [1,N,6] end2end tensor: " +
+                    DescribeConfigTensor(output_cfg));
+            return false;
         }
 
         auto metadata_loader = ascend_metadata_loader_;
@@ -724,9 +685,9 @@ bool ModelImportExporter::ValidateModelPackageContract(const std::string& config
                                         metadata_error + " artifact=" + artifact_path);
             return false;
         }
-        if (metadata.inputs.size() != 1 || metadata.outputs.size() != 6) {
+        if (metadata.inputs.size() != 1 || metadata.outputs.size() != 1) {
             std::ostringstream detail;
-            detail << "expected 1 input and 6 outputs from AscendCL metadata, got inputs="
+            detail << "expected 1 input and 1 output from AscendCL metadata, got inputs="
                    << metadata.inputs.size() << " outputs=" << metadata.outputs.size();
             error = MakeValidationError("ascend", config_path, model_dir, detail.str());
             return false;
@@ -741,19 +702,13 @@ bool ModelImportExporter::ValidateModelPackageContract(const std::string& config
             return false;
         }
 
-        for (std::size_t index = 0; index < metadata.outputs.size(); ++index) {
-            const auto& runtime_output = metadata.outputs[index];
-            const auto& config_output  = model["outputs"][index];
-            const auto config_shape    = ReadShape(config_output);
-            const bool matches         = runtime_output.format == "NCHW" && runtime_output.type == "FP16" &&
-                                 runtime_output.dims == config_shape &&
-                                 runtime_output.name == config_output.value("name", std::string());
-            if (!matches) {
-                error = MakeValidationError("output[" + std::to_string(index) + "]", config_path, model_dir,
-                                            "config=" + DescribeConfigTensor(config_output) +
-                                                " runtime=" + DescribeRuntimeTensor(runtime_output));
-                return false;
-            }
+        const auto& runtime_output = metadata.outputs.front();
+        if (runtime_output.format != "ND" || runtime_output.type != "FP16" ||
+            runtime_output.dims != output_shape) {
+            error = MakeValidationError("output[0]", config_path, model_dir,
+                                        "config=" + DescribeConfigTensor(output_cfg) +
+                                            " runtime=" + DescribeRuntimeTensor(runtime_output));
+            return false;
         }
 
         return true;

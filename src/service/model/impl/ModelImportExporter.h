@@ -32,7 +32,7 @@ public:
     };
 
     // Ascend OM metadata uses the same shape/name/dtype surface as RKNN, only
-    // with FP16 NCHW tensors instead of INT8 quantized ones.
+    // with FP16 NCHW/ND tensors instead of INT8 quantized ones.
     using AscendModelMetadata = RknnModelMetadata;
 
     using RknnMetadataLoader   = std::function<bool(const std::string&, RknnModelMetadata&, std::string&)>;

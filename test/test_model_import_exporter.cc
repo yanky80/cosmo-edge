@@ -106,37 +106,24 @@ nlohmann::json MakeAscend310P3Yolo26Config() {
              {{{"name", "ascend_yolo26"},
                {"file_name", "model.om"},
                {"max_batch", 1},
-               {"inputs", {{{"name", "images"}, {"shape", {1, 3, 640, 640}}, {"data_type", 2}}}},
+               {"inputs", {{{"name", "images"}, {"shape", {1, 3, 960, 960}}, {"data_type", 2}}}},
                {"outputs",
-                {{{"name", "reg0"}, {"shape", {1, 4, 80, 80}}, {"data_type", 2}},
-                 {{"name", "cls0"}, {"shape", {1, 1, 80, 80}}, {"data_type", 2}},
-                 {{"name", "reg1"}, {"shape", {1, 4, 40, 40}}, {"data_type", 2}},
-                 {{"name", "cls1"}, {"shape", {1, 1, 40, 40}}, {"data_type", 2}},
-                 {{"name", "reg2"}, {"shape", {1, 4, 20, 20}}, {"data_type", 2}},
-                 {{"name", "cls2"}, {"shape", {1, 1, 20, 20}}, {"data_type", 2}}}},
+                {{{"name", "output0"}, {"shape", {1, 300, 6}}, {"data_type", 2}}}},
                {"params",
                 {{"preprocess_mode", "image_to_tensor"},
-                 {"output_format", "yolo26_raw"},
-                 {"input_size", {640, 640}},
+                 {"output_format", "yolo_e2e"},
+                 {"input_size", {960, 960}},
                  {"padding_color", {114, 114, 114}},
                  {"confidence_threshold", 0.25},
                  {"nms_threshold", 0.45},
-                 {"top_k", 300},
-                 {"reg_max", 1}}}}}}};
+                 {"top_k", 300}}}}}}};
 }
 
 ModelImportExporter::AscendModelMetadata MakeAscendYolo26Metadata() {
     using Tensor = ModelImportExporter::TensorMetadata;
     ModelImportExporter::AscendModelMetadata metadata;
-    metadata.inputs.push_back({"images", {1, 3, 640, 640}, "NCHW", "FP16", "NONE", 0, 0.0F});
-    metadata.outputs = {
-        Tensor{"reg0", {1, 4, 80, 80}, "NCHW", "FP16", "NONE", 0, 0.0F},
-        Tensor{"cls0", {1, 1, 80, 80}, "NCHW", "FP16", "NONE", 0, 0.0F},
-        Tensor{"reg1", {1, 4, 40, 40}, "NCHW", "FP16", "NONE", 0, 0.0F},
-        Tensor{"cls1", {1, 1, 40, 40}, "NCHW", "FP16", "NONE", 0, 0.0F},
-        Tensor{"reg2", {1, 4, 20, 20}, "NCHW", "FP16", "NONE", 0, 0.0F},
-        Tensor{"cls2", {1, 1, 20, 20}, "NCHW", "FP16", "NONE", 0, 0.0F},
-    };
+    metadata.inputs.push_back({"images", {1, 3, 960, 960}, "NCHW", "FP16", "NONE", 0, 0.0F});
+    metadata.outputs = {Tensor{"output0", {1, 300, 6}, "ND", "FP16", "NONE", 0, 0.0F}};
     return metadata;
 }
 
@@ -714,6 +701,37 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
                  std::ofstream(package_dir / "extra.onnx") << "wrong-platform";
              },
              "stage=artifact"},
+            {"missing input tensor",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["inputs"].erase(config["models"][0]["inputs"].begin());
+             },
+             "stage=config"},
+            {"missing output tensor",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["outputs"].erase(config["models"][0]["outputs"].begin());
+             },
+             "stage=config"},
+            {"multiple output tensors",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["outputs"].push_back(
+                     {{"name", "output1"}, {"shape", {1, 300, 6}}, {"data_type", 2}});
+             },
+             "stage=config"},
+            {"wrong output_format",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["params"]["output_format"] = "yolo26_ultralytics";
+             },
+             "stage=config"},
+            {"missing preprocess_mode",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["params"].erase("preprocess_mode");
+             },
+             "stage=config"},
+            {"missing input_size",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["params"].erase("input_size");
+             },
+             "stage=config"},
             {"bad input dtype",
              [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
                  config["models"][0]["inputs"][0]["data_type"] = 5;
@@ -721,27 +739,17 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
              "stage=config"},
             {"bad input shape",
              [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
-                 config["models"][0]["inputs"][0]["shape"] = {1, 640, 640, 3};
-             },
-             "stage=config"},
-            {"bad output count",
-             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
-                 config["models"][0]["outputs"].erase(config["models"][0]["outputs"].begin() + 5);
-             },
-             "stage=config"},
-            {"misordered output names",
-             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
-                 config["models"][0]["outputs"][1]["name"] = "reg1";
-             },
-             "stage=config"},
-            {"bad output shape",
-             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
-                 config["models"][0]["outputs"][2]["shape"] = {1, 4, 80, 80};
+                 config["models"][0]["inputs"][0]["shape"] = {1, 960, 960, 3};
              },
              "stage=config"},
             {"bad output dtype",
              [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
-                 config["models"][0]["outputs"][0]["data_type"] = 5;
+                 config["models"][0]["outputs"][0]["data_type"] = 0;
+             },
+             "stage=config"},
+            {"bad output shape",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["outputs"][0]["shape"] = {1, 300, 7};
              },
              "stage=config"},
             {"runtime input mismatch",
@@ -749,16 +757,37 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
                  metadata.inputs[0].type = "INT8";
              },
              "stage=input"},
+            {"runtime input format mismatch",
+             [](nlohmann::json&, ModelImportExporter::AscendModelMetadata& metadata, std::string&) {
+                 metadata.inputs[0].format = "NHWC";
+             },
+             "stage=input"},
+            {"runtime input shape mismatch",
+             [](nlohmann::json&, ModelImportExporter::AscendModelMetadata& metadata, std::string&) {
+                 metadata.inputs[0].dims = {1, 3, 640, 640};
+             },
+             "stage=input"},
             {"runtime output mismatch",
              [](nlohmann::json&, ModelImportExporter::AscendModelMetadata& metadata, std::string&) {
-                 metadata.outputs[4].dims = {1, 4, 80, 80};
+                 metadata.outputs[0].dims = {1, 300, 5};
              },
-             "stage=output[4]"},
-            {"runtime output name mismatch",
+             "stage=output[0]"},
+            {"runtime output dtype mismatch",
              [](nlohmann::json&, ModelImportExporter::AscendModelMetadata& metadata, std::string&) {
-                 metadata.outputs[1].name = "reg1";
+                 metadata.outputs[0].type = "FP32";
              },
-             "stage=output[1]"},
+             "stage=output[0]"},
+            {"runtime output format mismatch",
+             [](nlohmann::json&, ModelImportExporter::AscendModelMetadata& metadata, std::string&) {
+                 metadata.outputs[0].format = "NCHW";
+             },
+             "stage=output[0]"},
+            {"runtime output count mismatch",
+             [](nlohmann::json&, ModelImportExporter::AscendModelMetadata& metadata, std::string&) {
+                 metadata.outputs.push_back(
+                     ModelImportExporter::TensorMetadata{"output1", {1, 300, 6}, "ND", "FP16", "NONE", 0, 0.0F});
+             },
+             "stage=ascend"},
             {"runtime loader failure includes stage",
              [](nlohmann::json&, ModelImportExporter::AscendModelMetadata&, std::string& loader_error) {
                  loader_error = "aclmdlLoadFromFile ret=-1";
