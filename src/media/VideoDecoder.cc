@@ -19,6 +19,12 @@ namespace media {
 
     VideoDecoder::~VideoDecoder() {}
 
+    bool VideoDecoder::Flush() {
+        // Synchronous backends (CPU/Sophon/RK3588) deliver every frame during
+        // the stream, so nothing is buffered to drain.
+        return true;
+    }
+
     void VideoDecoder::SetCodecType(VideoCodecType type, int valWidth, int valHeight) {
         codec_type_ = type;
         width_      = static_cast<size_t>(valWidth);

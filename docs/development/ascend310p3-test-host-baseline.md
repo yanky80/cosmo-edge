@@ -192,3 +192,92 @@ readelf -h "${ASCEND_TOOLKIT_HOME}/lib64/libascendcl.so" | grep -E "Machine|Clas
 
 上述全部命令按小节顺序执行一遍即为完整复验；任何值与上表不一致时，以复验
 结果更新本文件并同步调整 `cmake/ascend_sdk.cmake` 的检查项。
+
+## Issue #30 验收：Ascend 解码帧 → FrameSurface（2026-08-04）
+
+`src/media/VideoDecoderAscend.{h,cc}`（`h264_ascend`/`h265_ascend` → host NV12
+`FrameSurface`）+ 独立 smoke（`test/ascend310p3/ascend_decoder_smoke.cc`）。
+全部验收在本机锁下执行，媒体后端统一使用 `/opt/ffmpeg-4.4.1`。
+
+### 关键结论
+
+- Gate 0 解码器按名称显式选择（`avcodec_find_decoder_by_name`），不支持的解码
+  类型拒绝打开，无软件回退。
+- 非 Gate 0 设备号在工厂处明确拒绝：`VideoDecoder::Create(device_id, ...)`
+  在 `device_id != 0` 时返回 nullptr（invalid device address 拒绝路径）；打开/
+  发送/接收失败统一附带 `av_strerror` 文本。
+- 解码输出为 host NV12（`buf[0/1]` 有效 `AVBufferRef`，`hw_frames_ctx=NULL`），
+  `FrameSurface` 的 `lifetime` 持有 `AVFrame`（`av_frame_move_ref`），平面/行距/
+  尺寸保留在 `FrameSurface`；帧索引与时间戳（`SetFrameIndex`/`SetTimestamp`）
+  同为 demux 包索引（`SendPacket` 把 pts/dts 设为 `frame_idx`）——引擎下游经
+  `FrameInfoSave`/`FrameInfoGet` 用该索引还原流的真实时间戳与 stream identity，
+  smoke 校验每个解码帧的索引/时间戳都能映射回已发送的视频流包。
+- `h265_ascend` 的帧输出是异步的：文件流结束后若不做 EOS flush，硬件队列里
+  的帧不会送达 `receive_frame`（只调 receive 会一直 EAGAIN）。`VideoDecoder`
+  新增 `Flush()`（Ascend 实现为 `avcodec_send_packet(NULL)` 触发 HiMpi drain），
+  smoke 在流结束后 flush + 轮询取帧。加 flush 后 h265 本地/RTSP 稳定 30/30。
+
+> 注：本 issue 不改动既有 demux/reconnect 流程，验收以 smoke 直接驱动真实
+> `VideoDecoderAscend` 类为准（310P3 主机上完整引擎构建尚未就绪）。引擎侧
+> `AlgChannelDecode` 接入 h265 的每包 drain + EOS flush 属后续 issue。
+
+### 样本与 RTSP 源
+
+```bash
+# 本地样本（已在 /tmp）
+/opt/ffmpeg-4.4.1/ffmpeg -y -loglevel error -i /tmp/cosmo_baseline_h264.mp4 \
+  -c copy -bsf:v h264_mp4toannexb -f h264 /tmp/cosmo_baseline_h264.264
+/opt/ffmpeg-4.4.1/ffmpeg -y -loglevel error -i /tmp/cosmo_baseline_h265.mp4 \
+  -c copy -bsf:v hevc_mp4toannexb -f hevc /tmp/cosmo_baseline_h265.h265
+
+# 依赖零、stdlib-only 的 RTSP 测试源（TCP interleaved，与引擎 RtspDemuxStrategy 一致）
+python3 test/ascend310p3/rtsp_test_source.py --file /tmp/cosmo_baseline_h265.h265 \
+  --codec h265 --port 8554
+```
+
+主机上 mediamtx（docker 拉取被网络阻断）、VLC RTSP（仅 UDP 且 H.265 RTP 打
+包/参数集不完整）均不可用，故用上述最小 RTSP 源验证 `--rtsp` 路径。
+
+### smoke 构建（主机）
+
+```bash
+g++ -std=c++17 -O2 -I src -I 3rd/fmt-7.1.2/include \
+  test/ascend310p3/ascend_decoder_smoke.cc \
+  3rd/fmt-7.1.2/src/format.cc \
+  src/media/VideoDecoder.cc src/media/VideoDecoderCreateAscend.cc \
+  src/media/VideoDecoderAscend.cc src/media/VideoFrame.cc \
+  src/media/PixelFormatUtils.cc \
+  src/mem/MemoryPoolMng.cc src/mem/FixedBlockPool.cc \
+  src/mem/AllocatorCpu.cc src/mem/BlockFreqCalc.cc \
+  src/util/Thread.cc src/util/ThreadRegistry.cc src/util/TimeUtil.cc \
+  -I/opt/ffmpeg-4.4.1/ascend/include \
+  -L/opt/ffmpeg-4.4.1/ascend/lib -lavformat -lavcodec -lavutil \
+  -Wl,-rpath,/opt/ffmpeg-4.4.1/ascend/lib -lpthread \
+  -o /tmp/ascend_decoder_smoke
+```
+
+### 实测结果（310P3 主机，全部通过）
+
+```text
+$ /tmp/ascend_decoder_smoke --h264 /tmp/cosmo_baseline_h264.mp4 --h265 /tmp/cosmo_baseline_h265.mp4 --frames 30
+gate0 decoders present: h264_ascend h265_ascend
+error paths passed: unsupported codec and invalid device id rejected
+source passed: /tmp/cosmo_baseline_h264.mp4 codec=h264_ascend frames=30 fmt=nv12 planes=2 pitch=320 rows=240 size=116318
+source passed: /tmp/cosmo_baseline_h265.mp4 codec=h265_ascend frames=30 fmt=nv12 planes=2 pitch=320 rows=240 size=115358
+ascend decoder smoke passed
+
+$ /tmp/ascend_decoder_smoke --h265 /tmp/cosmo_baseline_h265.mp4 --frames 30   # 连跑 3 次均通过
+
+$ /tmp/ascend_decoder_smoke --rtsp rtsp://127.0.0.1:8554/stream --frames 30   # h265 RTSP
+source passed: rtsp://127.0.0.1:8554/stream codec=h265_ascend frames=30 fmt=nv12 planes=2 pitch=320 rows=240 size=115358
+
+$ /tmp/ascend_decoder_smoke --rtsp rtsp://127.0.0.1:8554/stream --frames 30   # h264 RTSP（rtsp_test_source.py 切 h264）
+source passed: rtsp://127.0.0.1:8554/stream codec=h264_ascend frames=30 fmt=nv12 planes=2 pitch=320 rows=240 size=116318
+```
+
+契约检查（`scripts/ascend_decoder_contract_check.sh`）在主机
+`ASCEND_FFMPEG_PREFIX=/opt/ffmpeg-4.4.1/ascend` 下与本地（系统 FFmpeg 头）均通过：
+
+```text
+All tests passed (83 assertions in 5 test cases)
+```
