@@ -182,6 +182,12 @@ input: images, batch=1, 960x960, fixed shape, NCHW FP16
 output: output0, [1, 300, 6], ND FP16（end2end：x1,y1,x2,y2,score,class_id）
 ```
 
+> 输入值域（2026-08-05 Issue #29 实测确认）：模型输入为 **RGB 归一化 0~1**
+> 的 FP16 NCHW（与 Ultralytics 预处理张量一致，即 `image_to_tensor` 负责
+> `/255` 归一化与 BGR→RGB）。同一张图喂 0~255 原始像素时检测置信度塌缩为 0，
+> 喂 0~1 时与 Ultralytics 参考输出一致（见 Issue #29 真机记录）。首期 ATC 不插入
+> static AIPP，归一化由 host 侧 `image_to_tensor` 完成。
+
 > B 方案（2026-08-05 决策）：310P3 算力强于 RK3588，不要求 OM 导出六路 raw heads；
 > 直接消费图内已完成的解码/NMS 输出，host 只做 top-k 与 letterbox 坐标恢复。
 > 六路 raw-head 契约保留给 RK3588 INT8 路径。若后续接入非 end2end 的
@@ -347,6 +353,79 @@ output: output0, [1, 300, 6], ND FP16（end2end：x1,y1,x2,y2,score,class_id）
   (HEAD 的 `VideoDemuxerStream.cc` 等使用 FFmpeg 5.x `const AVCodec*`,本地 prebuild 与真机
   `/opt/ffmpeg-4.4.1`(Ascend 编译)均为 4.x);真机 checkout 早于该改动,可正常构建。
   与本 issue 改动无关,未在本 issue 修复。
+
+#### Issue #29：YOLO26 AscendCL 推理冒烟（2026-08-05，已执行）
+
+仓库新增 `AscendNetNode`（`src/nn/device/ascend/`），进程级单次 `aclInit`
+（`ascend::EnsureAclInitialized()`，CANN 8.0 下第二次 `aclInit` 返回
+`100002`/`ACL_ERROR_REPEAT_INITIALIZE`），每个 Graph 独立 context/stream/模型/
+dataset/device buffer，推理复用预分配 buffer。输入输出都声明为 host 内存
+（节点内部 H2D→`aclmdlExecuteAsync`→stream 同步→D2H 并 FP16→FP32 转换），
+因此 Graph 不插入复制节点；不依赖 ONNX Runtime，无 CPU 回退。冒烟程序
+`test/ascend310p3/ascend_acl_smoke.cc` 直接驱动真实引擎路径
+（`Graph::Init/Forward/Output` + `yolo_e2e` 解码）。
+
+构建与运行（310P3 测试机 `/root/cosmo-edge-issue29`，rsync 自本分支）：
+
+```bash
+ln -sfn /root/cosmo-edge-issue29/fmt-7.1.2 /root/cosmo-edge-issue29/3rd/fmt-7.1.2
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+g++ -std=c++17 -O2 -DCOSMO_NN_USE_ASCEND_BACKEND -I src -I 3rd/fmt-7.1.2/include \
+    -I"${ASCEND_TOOLKIT_HOME}/include" test/ascend310p3/ascend_acl_smoke.cc \
+    src/nn/device/ascend/ascend_net_node.cc src/nn/device/ascend/ascend_node_creator.cc \
+    src/nn/core/status.cc src/nn/core/blob.cc src/nn/core/blob_impl.cc \
+    src/nn/core/abstract_device.cc src/nn/core/abstract_context.cc \
+    src/nn/core/shared_resource.cc src/nn/core/blob_store.cc src/nn/core/graph.cc \
+    src/nn/node/node.cc src/nn/node/net_node.cc src/nn/node/node_type_utils.cc \
+    src/nn/node/node_creator.cc src/nn/node/input_node.cc src/nn/node/identity_node.cc \
+    src/nn/node/yolo_e2e_decode_node.cc src/nn/utils/op.cc src/nn/utils/string_format.cc \
+    src/nn/utils/timer.cc src/nn/utils/dims_vector_utils.cc \
+    src/nn/utils/blob_memory_size_info.cc src/nn/utils/blob_memory_size_utils.cc \
+    src/nn/utils/data_type_utils.cc src/nn/device/naive/naive_device.cc \
+    src/nn/device/naive/naive_context.cc 3rd/fmt-7.1.2/src/format.cc \
+    -L"${ASCEND_TOOLKIT_HOME}/lib64" -lascendcl -Wl,-rpath,"${ASCEND_TOOLKIT_HOME}/lib64" \
+    -lpthread -o ascend_acl_smoke
+```
+
+地面真值输入准备（Ultralytics 8.4.112 预处理张量，与 OM 输入逐字节对应）：
+
+```bash
+# 720p 相机流 sample_ascend.264 抽第 164 帧，letterbox 到 960x960（灰边 114）
+/opt/ffmpeg-4.4.1/ascend/bin/ffmpeg -y -i /opt/ffmpeg-4.4.1/ascend/sample_ascend.264 \
+  -vf "select=eq(n\,164)" -vframes 1 /tmp/sa_164.png
+# cv2 等比例缩放+居中 padding 到 960x960，再跑 ultralytics 拿预处理张量
+# （RGB NCHW FP32 0~1，/255），转 FP16 写 /tmp/input_sa164_0to1.f16
+```
+
+ultralytics 参考（同一张 960x960 输入，`imgsz=960`，conf=0.001）：3 个候选，
+最高 `cls=3 conf=0.8946 xyxy=[339.6, 326.6, 960, 746.5]`。
+
+运行结果（`uname -a`：`Linux tjx-Default-string 5.15.0-25-generic x86_64`；
+`npu-smi info`：`310P3` Health OK，设备 0，`npu-smi 24.1.1.1`）：
+
+```text
+$ ./ascend_acl_smoke --om /opt/convert/bjsubway-yolo26/model.om \
+    --input /tmp/input_sa164_0to1.f16 --conf 0.25 --iters 3 --expect-detections
+om=/opt/convert/bjsubway-yolo26/model.om input_dims=[1,3,960,960] input_bytes=5529600
+graph_init device=DEVICE_ASCEND...
+iteration=0 output_dims=[1,300,6] dtype=FP32
+det[0] cx=650.8 cy=536.5 w=622.5 h=420.0 score=0.8940 class=3
+parsed_detections=1 (conf>=0.25)
+iteration=1 output identical to iteration 0 (buffers reused)
+iteration=2 output identical to iteration 0 (buffers reused)
+smoke OK: 3 iteration(s), deterministic parsed detections on device 0
+```
+
+对照：OM 输出 `score=0.8940`、中心 `(650.8, 536.5)`、`w/h=622.5/420.0`
+（≈xyxy `[339.5, 326.5, 962, 746.5]`）与 Ultralytics 参考
+`conf=0.8946`、`xyxy=[339.6, 326.6, 960, 746.5]` 一致（差值来自 FP16 舍入）。
+三个迭代输出逐字节一致，确认预分配 buffer 复用；同一输入喂 0~255 时 0 检测，
+确认 OM 输入契约为 0~1 归一化。
+
+排查记录：320x240 基线帧（`/tmp/cosmo_baseline_h264.mp4`）的目标过小，在
+960x960 letterbox 下 0 检测（Ultralytics 的 `auto=True` letterbox 实际送
+736x960 才有检测，OM 固定 960x960 不接受），故改用 720p `sample_ascend.264`
+帧作为地面真值；这是输入侧问题，与推理链路无关。
 
 RK3588 板回归：未执行。原 INT8 affine 路径由本地 `[yolo26]` INT8 用例覆盖且全绿；板端 SDK 缺少可用的 `librknnrt` sysroot，完整板端构建成本高，留给 RK3588 专项验证。
 

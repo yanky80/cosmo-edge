@@ -47,6 +47,13 @@ if(COSMO_NN_USE_RKNN_BACKEND)
     list(APPEND NN_ALL_SRC ${NN_RKNN_SRC})
 endif()
 
+if(COSMO_NN_USE_ASCEND_BACKEND)
+    file(GLOB_RECURSE NN_ASCEND_SRC
+        "${NN_DIR}/device/ascend/*.h" "${NN_DIR}/device/ascend/*.cc"
+    )
+    list(APPEND NN_ALL_SRC ${NN_ASCEND_SRC})
+endif()
+
 # ── Build cosmo_nn OBJECT library ──
 add_library(cosmo_nn OBJECT ${NN_ALL_SRC})
 
@@ -82,6 +89,11 @@ if(COSMO_NN_USE_RKNN_BACKEND)
         "${COSMO_RK3588_SYSROOT}/usr/include/libdrm")
 endif()
 
+if(COSMO_NN_USE_ASCEND_BACKEND)
+    target_compile_definitions(cosmo_nn PRIVATE COSMO_NN_USE_ASCEND_BACKEND)
+    target_include_directories(cosmo_nn PRIVATE "${COSMO_ASCEND_SDK_ROOT}/include")
+endif()
+
 # Symbol hiding + suppress C++11-era warnings
 target_compile_options(cosmo_nn PRIVATE
     -fvisibility=hidden
@@ -103,6 +115,10 @@ if(COSMO_NN_USE_RKNN_BACKEND)
         "${COSMO_RK3588_RKNNRT_LIB}"
         "${COSMO_RK3588_RGA_LIB}"
         "${COSMO_RK3588_DRM_LIB}")
+endif()
+
+if(COSMO_NN_USE_ASCEND_BACKEND)
+    target_link_libraries(cosmo_nn PRIVATE "${COSMO_ASCENDCL_LIB}")
 endif()
 
 # Ensure all ExternalProject third-party targets are built before compiling NN
