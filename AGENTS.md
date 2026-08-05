@@ -44,4 +44,19 @@
   the repository.
 - Record the exact host-test commands and relevant results in the pull request.
 
+### aarch64 310 test machine (via jump host)
+
+- aarch64 Huawei 310 test machine (for `COSMO_TARGET_ARCH=aarch64` validation
+  and baseline collection, e.g. issue #37): `root@100.127.41.17`, reachable
+  only through the 310P3 test host above as jump host.
+- Intended access pattern (not yet verified — do not assume it works until
+  first connection succeeds):
+  ```bash
+  flock -w 1800 /tmp/cosmo-edge-ascend310p3-hw.lock -c \
+    'ssh -o ConnectTimeout=10 -p 1022 root@35623rcqc768.vicp.fun \
+      "ssh -o ConnectTimeout=10 root@100.127.41.17 \"<command>\""'
+  ```
+- Before testing, confirm the target with `uname -a`, `cat /proc/device-tree/model`,
+  and `npu-smi info`.
+
 @/home/yanky/.codex/RTK.md

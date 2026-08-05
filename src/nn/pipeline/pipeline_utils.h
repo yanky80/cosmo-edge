@@ -53,6 +53,9 @@ namespace pipeline_utils {
                                                        const std::vector<float>& output_scales,
                                                        const std::vector<int>& output_zero_points);
 
+    std::unique_ptr<YoloPost> MakeYolo26UltralyticsPostOp(float nms_threshold, float conf_threshold,
+                                                          int top_k, int input_width, int input_height);
+
     std::unique_ptr<ImageToTensor> MakeImageToTensorOp(int input_width, int input_height,
                                                        const std::vector<int>& padding_color);
 

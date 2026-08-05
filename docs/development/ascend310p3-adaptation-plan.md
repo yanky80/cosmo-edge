@@ -90,7 +90,8 @@ CPU resize。先建立可复现的正确性和性能基线。
 
 在平台 Profile 中增加 `ascend310p3`，派生以下固定配置：
 
-- 架构为 `x86_64`。
+- 架构参数化：`COSMO_TARGET_ARCH` 合法集 `{x86_64, aarch64}`，默认 `x86_64`；
+  aarch64 时 x86_64 主机走现有 aarch64 交叉 toolchain，aarch64 主机用宿主工具链。
 - NN 后端为 Ascend，媒体后端为 Ascend。
 - 模型扩展名和主扩展名为 `.om`。
 - 模型目录 token、引擎类型和 `chip_type` 为 `ASCEND310P3`。
@@ -167,6 +168,11 @@ Ascend `image_to_tensor` 节点负责：
 
 ## OM 模型契约
 
+> 2026-08-05 决策(B 方案):310P3 算力强于 RK3588,无需 RK3588 那种
+> "最大化 NPU、host 只做 raw 解码"的极端优化。不要求 OM 导出六路 raw heads;
+> 直接消费 Ultralytics 导出(或 ATC 转换后)的单张后处理输出,host 只做
+> NMS/top-k/letterbox 坐标恢复。六路 raw-head 契约保留给 RK3588 INT8 路径。
+
 首期从同一 YOLO26 ONNX 基线生成 FP16 OM：
 
 ```text
@@ -213,6 +219,29 @@ output layout: NCHW
 }
 ```
 
+310P3 B 方案(Ultralytics 单输出)配置:把 `output_format` 改为 `yolo26_ultralytics`,
+`reg_max` 不适用:
+
+```json
+{
+  "chip_type": "ASCEND310P3",
+  "model_type": "yolo26_det",
+  "models": [
+    {
+      "file_name": "model.om",
+      "max_batch": 1,
+      "params": {
+        "output_format": "yolo26_ultralytics",
+        "input_size": [960, 960],
+        "confidence_threshold": 0.25,
+        "nms_threshold": 0.45,
+        "top_k": 300
+      }
+    }
+  ]
+}
+```
+
 包内只允许一个显式 `.om` 制品。导入时通过 AscendCL metadata 校验输入、六路输出、
 固定 batch、shape 和 FP16 dtype。
 
@@ -228,6 +257,20 @@ output layout: NCHW
 
 首期不做 W8A8。只有阶段性能数据证明模型执行是主要瓶颈，并且存在代表性标定集时，
 才单独评估量化。
+
+### B 方案:Ultralytics 单输出解码(`yolo26_ultralytics_postprocess`)
+
+新增独立节点 `NODE_YOLO26_ULTRALYTICS_DECODE`,与六路 `yolo26_raw` 路径并存、互不影响:
+
+- 输入:单张 FP32/FP16 `[1, 4+nc, N]`(channel-major),rows 0-3 = cx/cy/w/h(网络输入像素),
+  rows 4+ = 各类别 sigmoid 概率。dist2bbox 与 class sigmoid 已固化在导出图内,
+  host 不要求任何量化 scale/zero-point 元数据。
+- 处理:置信度直接比较 sigmoid 分数(严格大于),class-aware NMS、top-k,
+  输出 `[1, top_k, 6]`(cx, cy, w, h, score, class_id),letterbox 坐标恢复复用
+  `PickDetectionObjects`。
+- 失败契约:输出非 3 维、通道数 < 5(4 box + 1 class)、dtype 非 FP32/FP16、
+  或 class score 超出 [0,1](说明 buffer 不是 channel-major,例如 cell-major 张量被误读)
+  均返回可操作错误,不产出垃圾检测。
 
 ## 故障策略
 
@@ -262,6 +305,63 @@ output layout: NCHW
 - 日志确认硬解码、DVPP 和 AscendCL 均生效。
 - 阶段二确认硬解码帧设备地址直接进入 DVPP，不生成中间 host 图像。
 - 缺设备、错误 OM、硬解码器缺失和 DVPP 失败的故障测试。
+
+#### Issue #27：FP16 raw-head 真机验证记录
+
+执行时间与主机：2026-08-04，`ssh -p 1022 root@35623rcqc768.vicp.fun`（x86_64 / Ubuntu 22.04 / gcc 11.4，`npu-smi info` 设备 0 正常）。以下构建基线只在本机生效，未入库。
+
+- 分支 worktree rsync 到 `/root/cosmo-edge-issue27`；`prebuild/ffmpeg/x86_64/{include,lib}` 符号链接到 `/opt/ffmpeg-4.4.1/ascend`（Ascend 编译的 FFmpeg 4.4.1），`ldd cosmo-tests` 确认 `libavcodec.so.58`、`libswscale.so.5` 等均来自 `/opt/ffmpeg-4.4.1/ascend/lib`。
+- 需 `apt-get install -y automake autoconf libtool`（srs external 构建依赖，已获批准安装）。
+- 三个源文件按 FFmpeg 4.4 API 打了临时补丁（`AVInputFormat*`、`FF_PROFILE_*` 宏、`AVCodec*`），仅用于本机构建、未提交；属预存兼容问题，与 Issue #27 无关。
+- `cmake --build . --target cosmo-tests -j12` 构建成功。
+
+测试命令与结果（`LD_LIBRARY_PATH` 同 CI：`prebuild/ffmpeg/x86_64/lib`、`3rd/onnxruntime-linux-x64-1.26.0/lib`、`build-cpu/thirdparty_install/{openssl,curl,event,glog,mp4v2,uuid}/lib`）：
+
+- `./cosmo-tests "[yolo26]"` → `All tests passed (120 assertions in 9 test cases)`。覆盖 FP16 黄金（阈值、三尺度、NMS、top-k、letterbox 坐标恢复）、FP32、混合 dtype / 头数量 / shape / 类别通道错误、非 NCHW layout 拒绝、NaN/Inf 跳过，以及 INT8 affine 回归。
+- `./cosmo-tests`（全量）→ 888 个用例中 887 个通过、1 个失败：`test_video_frame_proc_nv12.cc` 的 `NV12ToI420` 在 Ascend `libswscale.so.5` 的 `sws_scale` 内 SIGSEGV（该崩溃会让全量跑在随机顺序下提前终止，统计不稳定）。已用最小 standalone 程序在真机复现：NV12→YUV420P 三平面输出即崩；本地仓库自带 prebuild FFmpeg 下同一用例通过。属 Ascend FFmpeg swscale 的预存环境问题，与 Issue #27 改动（仅 `yolo26_raw_decode_node`、`detection_pipeline` 与其测试）无关，未在本 issue 修复。
+
+#### OM 契约探测与端到端推理冒烟（2026-08-05）
+
+- 模型：`/opt/convert/cam_p2_distill_ascend_model/best_Ascend310P3.om`（md5 `76104ca44c95c916de6e841a56deb786`，与旧目录 `cki_drone_ascend_model` 为同一文件）。
+- AscendCL 描述符探测（`aclmdlGetNumOutputs` / `aclmdlGetOutputFormat` / `aclmdlGetOutputDataType` / `aclmdlGetOutputDims`）：
+  - input：`dtype=FP32 format=NCHW dims=[1,3,960,960] size=11059200`
+  - output：`dtype=FP32 format=ND dims=[1,300,6] size=7200`（端到端输出，模型内已完成 NMS；`metadata.yaml` 的 `nms: false` 与实际制品不符，`/opt/convert/export_model.py` 硬编码 `nms=True`）。
+- 真实推理冒烟（`aclmdlLoadFromFile` + `aclmdlExecute`）：相机帧 1280x720 letterbox 到 960x960（RGB、/255）→ 检出 2 个框：`cls=3 铲车 score=0.9517`、`cls=1 混凝土罐车 score=0.2510`；输出结构与仓库现有 `yolo_e2e_postprocess` 路径（消费 [1,300,6]）匹配。
+- 结论：该 OM 证明 310P3 设备推理链路可用，但不能验证 Issue #27 的六路 FP16 raw-head host 解码——端到端输出绕开了本 issue 实现的解码。Issue #27 端到端验收需要 `nms=False` 且 reg/cls 分离的六路 raw-head OM 导出；当前目录无此制品，验证程序已留档在真机 `/tmp/om_probe.c`、`/tmp/om_run.c`，待 raw-head OM 就绪后执行。
+
+#### raw-head 导出复测（2026-08-05，`end2end: false` + `nms: false`）
+
+- 模型重新生成：`/opt/convert/cam_p2_distill_ascend_model/best_Ascend310P3.om`（7332985 B，metadata 为 `end2end: false, nms: false, quantize: 16`）。
+- 探测契约：input `FP32 NCHW [1,3,960,960]`；output `FP32 ND [1,10,76500]`（4 尺度 240²/120²/60²/30² × 10 通道）。
+- 值分析（同相机帧推理，dump 为 `/tmp/out_raw.raw`）：每 cell 内容 = `[cx, cy, w, h, 6 个 class score]`，class 通道为 sigmoid 激活后的分数 ∈ (0,1)；与端到端模型检出框一致（30² 尺度 grid (16,5) 的 `[162.1, 532.0, 176.8, 134.5]` + class3 0.9795 ≈ E2E 铲车 `[cx=161.5, cy=530.5, w=179.5, h=134]`）。
+- 存储布局（numpy 复核，见下节 B 方案真机验证）：channel-major（rows 0-3 ∈ [1.7, 961]，rows 4-9 ∈ [0, 0.979]），即标准 Ultralytics 导出格式；早前把该 buffer 解读为 cell-major 是误读。
+- 临时 harness（未入库）把 [1,10,76500] 拆成 6 个头喂 `yolo26_raw_postprocess`：产出 160 个假检测（框坐标超出画幅）——解码器按 raw logits/距离处理，而图内已完成 dist2bbox + class sigmoid。
+- 结论：即使 `end2end: false` + `nms: false`，当前蒸馏/Detect 头导出仍把 bbox 解码与 class sigmoid 固化进图，输出不是 raw logits/distances，不符合六路 raw-head 契约。Issue #27 验收需要导出真正未解码的 raw head：每尺度分开的 reg（[1,4,H,W]，reg_max=1 距离）与 cls（[1,6,H,W]，logits）共 6 个 NCHW 张量；验证程序留档在真机 `/tmp/om_probe.c`、`/tmp/om_run.c`，raw-head OM 就绪后即可跑通。
+
+#### B 方案真机验证:Ultralytics 单输出解码(2026-08-05)
+
+- 模型:`/opt/convert/cam_p2_distill_ascend_model/best_Ascend310P3.om`(7332985 B,
+  metadata `end2end: false, nms: false, quantize: 16`,Ultralytics YOLO26n-p2、6 类)。
+- 探测(`/tmp/om_probe.c`,CANN `/usr/local/Ascend/ascend-toolkit/latest/x86_64-linux`):
+  input `FP32 NCHW [1,3,960,960]`;output `FP32 ND [1,10,76500]`(4 尺度 240²/120²/60²/30² × 10 通道)。
+- 布局复核(numpy,同相机帧推理 dump `/tmp/out_raw2.raw`):channel-major,rows 0-3 = cx/cy/w/h
+  ∈ [1.7, 961],rows 4-9 = 6 类 sigmoid 分数 ∈ [0, 0.979]。
+- 候选统计:score ≥ 0.25 共 13 个(铲车 9、混凝土罐车 4)。
+- 新节点验证:把真实 dump 构造成 `[1,10,76500]` blob 喂 `yolo26_ultralytics_postprocess`
+  (阈值 0.25、NMS 0.45、top-k 300),输出 2 个检测,与 E2E 冒烟一致:
+  - `cx=162.1 cy=532.0 w=176.8 h=134.5 score=0.9795 cls=3 铲车`(≈E2E `[161.5, 530.5, 179.5, 134]`)
+  - `cx=785.0 cy=606.0 w=358.0 h=304.5 score=0.4746 cls=1 混凝土罐车`
+- 测试命令与结果(构建基线 rsync 到 `/root/cosmo-edge-issue27`,`LD_LIBRARY_PATH` 同 CI):
+  - `cmake --build build-cpu --target cosmo-tests -j8` → 构建成功。
+  - `./build-cpu/cosmo-tests "[nn][yolo26]"` → `All tests passed (173 assertions in 14 test cases)`:
+    新增 5 个 ultralytics 用例(黄金阈值/NMS/top-k、letterbox 恢复、FP16、错误契约),
+    既有六路 raw/INT8/FP16 黄金用例全部保持绿色。
+- 环境说明:本机全量 `cosmo-tests` 链接被预存的 FFmpeg API 不匹配阻塞
+  (HEAD 的 `VideoDemuxerStream.cc` 等使用 FFmpeg 5.x `const AVCodec*`,本地 prebuild 与真机
+  `/opt/ffmpeg-4.4.1`(Ascend 编译)均为 4.x);真机 checkout 早于该改动,可正常构建。
+  与本 issue 改动无关,未在本 issue 修复。
+
+RK3588 板回归：未执行。原 INT8 affine 路径由本地 `[yolo26]` INT8 用例覆盖且全绿；板端 SDK 缺少可用的 `librknnrt` sysroot，完整板端构建成本高，留给 RK3588 专项验证。
 
 用固定视频比较前 100 个有效帧与 ONNX FP32 基线：
 

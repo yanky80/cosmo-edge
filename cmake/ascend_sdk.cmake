@@ -1,16 +1,26 @@
 # External Huawei CANN SDK integration for the ascend310p3 target profile.
 #
-# The ascend310p3 profile is an x86_64 host build (Ascend 310P3 PCIe card on an
-# x86_64 server). This file locates AscendCL (libascendcl) and DVPP
-# (libacl_dvpp) headers and shared libraries from a CANN installation and
-# fails at configure time when the SDK is missing, the library architecture
-# does not match, or the profile is used on a non-x86_64 host. No CANN,
-# driver, or firmware binaries are committed to the repository.
+# The ascend310p3 profile targets an Ascend 310P3 card from an x86_64 (locked
+# test-host baseline) or aarch64 (Kunpeng/SoC) build. This file locates
+# AscendCL (libascendcl) and DVPP (libacl_dvpp) headers and shared libraries
+# from a CANN installation and fails at configure time when the SDK is
+# missing, the library architecture does not match the target, or the
+# host/target combination is not supported. No CANN, driver, or firmware
+# binaries are committed to the repository.
 
-if(NOT CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+set(COSMO_ASCEND_FFMPEG_ROOT "" CACHE PATH
+    "Custom Ascend FFmpeg install prefix (ascend310p3; defaults to /opt/ffmpeg-4.4.1/ascend on x86_64)")
+
+# Native builds require host == target; cross builds allow an x86_64 host with
+# an aarch64 target (aarch64-linux toolchain).
+_cosmo_host_arch(_cosmo_ascend_host_arch)
+if(NOT COSMO_TARGET_ARCH STREQUAL "${_cosmo_ascend_host_arch}" AND
+   NOT (COSMO_TARGET_ARCH STREQUAL "aarch64" AND
+        _cosmo_ascend_host_arch STREQUAL "x86_64"))
     message(FATAL_ERROR
-        "COSMO_TARGET_PLATFORM=ascend310p3 requires an x86_64 host "
-        "(got ${CMAKE_HOST_SYSTEM_PROCESSOR})")
+        "COSMO_TARGET_PLATFORM=ascend310p3 target ${COSMO_TARGET_ARCH} requires "
+        "a ${COSMO_TARGET_ARCH} host (native) or an x86_64 host with the "
+        "aarch64 cross toolchain (got host ${CMAKE_HOST_SYSTEM_PROCESSOR})")
 endif()
 
 set(COSMO_ASCEND_SDK_ROOT "" CACHE PATH "External CANN toolkit root (AscendCL/DVPP headers and runtime)")
@@ -59,9 +69,16 @@ endfunction()
 _cosmo_find_ascend_lib(COSMO_ASCENDCL_LIB libascendcl.so)
 _cosmo_find_ascend_lib(COSMO_ASCEND_DVPP_LIB libacl_dvpp.so)
 
-# The locked baseline targets the x86_64 CANN build; reject anything else early.
+# The ELF architecture must match the configured target: X86-64 or AArch64.
 find_program(_cosmo_ascend_readelf readelf)
 if(_cosmo_ascend_readelf)
+    if(COSMO_TARGET_ARCH STREQUAL "aarch64")
+        set(_cosmo_ascend_expected_elf "AArch64")
+        set(_cosmo_ascend_expected_arch "aarch64")
+    else()
+        set(_cosmo_ascend_expected_elf "X86-64")
+        set(_cosmo_ascend_expected_arch "x86_64")
+    endif()
     foreach(_cosmo_ascend_lib IN ITEMS
             "${COSMO_ASCENDCL_LIB}"
             "${COSMO_ASCEND_DVPP_LIB}")
@@ -71,9 +88,9 @@ if(_cosmo_ascend_readelf)
             RESULT_VARIABLE _cosmo_ascend_elf_result
         )
         if(NOT _cosmo_ascend_elf_result EQUAL 0 OR
-           NOT _cosmo_ascend_elf_header MATCHES "X86-64")
+           NOT _cosmo_ascend_elf_header MATCHES "${_cosmo_ascend_expected_elf}")
             message(FATAL_ERROR
-                "Ascend library is not an x86_64 ELF: ${_cosmo_ascend_lib}")
+                "Ascend library is not an ${_cosmo_ascend_expected_arch} ELF: ${_cosmo_ascend_lib}")
         endif()
     endforeach()
 else()

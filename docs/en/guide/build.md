@@ -137,10 +137,14 @@ See the [RK3588 Preview Operations](rk3588-preview) guide for the package, runti
 
 ## Ascend 310P3 Profile Configure
 
-The Ascend 310P3 profile builds on an x86_64 host and validates the external
-CANN toolkit and the custom Ascend FFmpeg (`/opt/ffmpeg-4.4.1/ascend`,
-falling back to system FFmpeg) at configure time. No CANN, driver, firmware,
-or custom FFmpeg binaries are committed to the repository.
+The Ascend 310P3 profile builds for x86_64 by default (locked test-host
+baseline); the target architecture is parameterized with `COSMO_TARGET_ARCH`
+and can be `aarch64` (Kunpeng servers or on-board SoC deployments). The
+profile validates the external CANN toolkit and the custom Ascend FFmpeg at
+configure time. No CANN, driver, firmware, or custom FFmpeg binaries are
+committed to the repository.
+
+x86_64 default build (behavior identical to the locked baseline):
 
 ```bash
 source /usr/local/Ascend/ascend-toolkit/set_env.sh   # exports ASCEND_TOOLKIT_HOME
@@ -148,17 +152,44 @@ cmake -S . -B build_ascend310p3 \
   -DCOSMO_TARGET_PLATFORM=ascend310p3
 ```
 
+aarch64 cross build (x86_64 host + aarch64 cross toolchain, FFmpeg via
+sysroot):
+
+```bash
+cmake -S . -B build_ascend310p3_aarch64 \
+  -DCOSMO_TARGET_PLATFORM=ascend310p3 \
+  -DCOSMO_TARGET_ARCH=aarch64 \
+  -DCOSMO_ASCEND_SDK_ROOT=/path/to/aarch64-cann \
+  -DCOSMO_ASCEND_SYSROOT=/path/to/aarch64-sysroot
+```
+
+Native aarch64 builds (aarch64 host) use the host toolchain: pass
+`COSMO_TARGET_ARCH=aarch64` and `COSMO_ASCEND_SDK_ROOT` pointing at an aarch64
+CANN install; no sysroot or toolchain arguments are needed.
+
 Configure-time checks cover:
 
-- an x86_64 host and an x86_64 `libascendcl.so`
+- host/target combinations: native builds require host == target; cross builds
+  only allow an x86_64 host with an aarch64 target
+- `libascendcl.so` and `libacl_dvpp.so` ELF architecture matches the target
+  (`X86-64` / `AArch64`)
 - `include/acl/acl.h` and `include/acl/dvpp/hi_dvpp.h`
 - `lib64/libascendcl.so` and `lib64/libacl_dvpp.so`
-- custom Ascend FFmpeg (`h264_ascend`/`h265_ascend`) or system FFmpeg headers
-  and shared libraries
+
+FFmpeg lookup order:
+
+1. `COSMO_ASCEND_SYSROOT` (sysroot for cross builds and hermetic tests)
+2. `COSMO_ASCEND_FFMPEG_ROOT` custom FFmpeg root (defaults to
+   `/opt/ffmpeg-4.4.1/ascend` on x86_64, the locked test-host baseline)
+3. system FFmpeg dev packages (multiarch fallback via
+   `CMAKE_LIBRARY_ARCHITECTURE`)
 
 CANN environment initialization stays with the vendor-provided `set_env.sh`;
 the locked test-host software and media baseline is recorded in
 [Ascend 310P3 Test-Host Baseline](../development/ascend310p3-test-host-baseline).
+The aarch64 deployment baseline (aarch64 CANN, custom FFmpeg aarch64 path,
+driver/firmware versions) lives in that document's 「aarch64 部署基线（占位）」
+section until real-device collection.
 
 ## CPU Test Build
 
