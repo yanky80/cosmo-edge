@@ -68,6 +68,7 @@ endfunction()
 
 _cosmo_find_ascend_lib(COSMO_ASCENDCL_LIB libascendcl.so)
 _cosmo_find_ascend_lib(COSMO_ASCEND_DVPP_LIB libacl_dvpp.so)
+_cosmo_find_ascend_lib(COSMO_ASCEND_DVPP_MPI_LIB libacl_dvpp_mpi.so)
 
 # The ELF architecture must match the configured target: X86-64 or AArch64.
 find_program(_cosmo_ascend_readelf readelf)
@@ -81,7 +82,8 @@ if(_cosmo_ascend_readelf)
     endif()
     foreach(_cosmo_ascend_lib IN ITEMS
             "${COSMO_ASCENDCL_LIB}"
-            "${COSMO_ASCEND_DVPP_LIB}")
+            "${COSMO_ASCEND_DVPP_LIB}"
+            "${COSMO_ASCEND_DVPP_MPI_LIB}")
         execute_process(
             COMMAND "${_cosmo_ascend_readelf}" -h "${_cosmo_ascend_lib}"
             OUTPUT_VARIABLE _cosmo_ascend_elf_header
@@ -100,3 +102,4 @@ endif()
 message(STATUS "Ascend CANN SDK root: ${COSMO_ASCEND_SDK_ROOT}")
 message(STATUS "AscendCL library: ${COSMO_ASCENDCL_LIB}")
 message(STATUS "Ascend DVPP library: ${COSMO_ASCEND_DVPP_LIB}")
+message(STATUS "Ascend DVPP MPI library: ${COSMO_ASCEND_DVPP_MPI_LIB}")

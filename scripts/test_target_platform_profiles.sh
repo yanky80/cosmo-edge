@@ -84,6 +84,7 @@ create_fake_ascend_sdk() {
     printf 'int cosmo_fake_ascendcl_dummy;\n' >"$dummy"
     "$HOST_CC" -shared -fPIC "$dummy" -o "$sdk_root/lib64/libascendcl.so"
     "$HOST_CC" -shared -fPIC "$dummy" -o "$sdk_root/lib64/libacl_dvpp.so"
+    "$HOST_CC" -shared -fPIC "$dummy" -o "$sdk_root/lib64/libacl_dvpp_mpi.so"
     touch \
         "$sysroot/usr/include/libavcodec/avcodec.h" \
         "$sysroot/usr/lib/x86_64-linux-gnu/libavcodec.so" \
@@ -114,6 +115,7 @@ create_fake_ascend_sdk_aarch64() {
     printf 'int cosmo_fake_ascendcl_dummy;\n' >"$dummy"
     "$CROSS_CC" -shared -fPIC "$dummy" -o "$sdk_root/lib64/libascendcl.so"
     "$CROSS_CC" -shared -fPIC "$dummy" -o "$sdk_root/lib64/libacl_dvpp.so"
+    "$CROSS_CC" -shared -fPIC "$dummy" -o "$sdk_root/lib64/libacl_dvpp_mpi.so"
     touch \
         "$sysroot/usr/include/libavcodec/avcodec.h" \
         "$sysroot/usr/lib/aarch64-linux-gnu/libavcodec.so" \

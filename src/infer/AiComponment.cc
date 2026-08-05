@@ -18,6 +18,8 @@ cosmo::nn::DeviceType GetDeviceType() {
     return cosmo::nn::DeviceType::DEVICE_CPU;
 #elif defined(COSMO_NN_USE_RKNN_BACKEND)
     return cosmo::nn::DeviceType::DEVICE_RKNN;
+#elif defined(COSMO_NN_USE_ASCEND_BACKEND)
+    return cosmo::nn::DeviceType::DEVICE_ASCEND;
 #else
     return cosmo::nn::DeviceType::DEVICE_SOPHON_TPU;
 #endif
@@ -36,6 +38,31 @@ namespace {
 std::shared_ptr<cosmo::nn::Blob> MakeRknnSurfaceBlob(const VideoFramePtr& image) {
     auto surface = image->GetSurface();
     if (!surface || surface->memory_type != media::FrameSurfaceMemoryType::DmaBuf)
+        return nullptr;
+
+    cosmo::nn::BlobDesc desc;
+    desc.data_format = GetDataFormatType();
+    desc.data_type   = cosmo::nn::DataType::DATA_TYPE_UINT8;
+    desc.dims        = {1, static_cast<int>(image->GetHeight()), static_cast<int>(image->GetWidth()), 3};
+    desc.device_type = GetDeviceType();
+    cosmo::nn::BlobHandle handle;
+    handle.base      = surface.get();
+    handle.ownership = cosmo::nn::BLOB_HANDLE_EXTERNAL_OWNED;
+    return std::make_shared<cosmo::nn::Blob>(desc, handle);
+}
+
+}  // namespace
+#endif
+
+#ifdef COSMO_NN_USE_ASCEND_BACKEND
+namespace {
+
+std::shared_ptr<cosmo::nn::Blob> MakeAscendSurfaceBlob(const VideoFramePtr& image) {
+    auto surface = image->GetSurface();
+    // The Ascend FFmpeg decoder (h264_ascend/h265_ascend) delivers host NV12
+    // surfaces; AscendImageToTensorNode uploads them to DVPP itself.
+    if (!surface || surface->memory_type != media::FrameSurfaceMemoryType::Host ||
+        surface->planes.size() != 2)
         return nullptr;
 
     cosmo::nn::BlobDesc desc;
@@ -127,6 +154,15 @@ util::ErrorEnum ConvertImagesToBlobs(const std::vector<VideoFramePtr>& images,
 
             LOG_DEBUG("ConvertImagesToBlobs: I420 {}x{} -> BGR for CPU pipeline", w, h);
             blobs.push_back(bgr_blob);
+            continue;
+        }
+#endif
+
+#ifdef COSMO_NN_USE_ASCEND_BACKEND
+        // Ascend path: pass the host NV12 surface through so the DVPP
+        // image_to_tensor node can upload and letterbox it on the device.
+        if (auto blob = MakeAscendSurfaceBlob(image)) {
+            blobs.push_back(blob);
             continue;
         }
 #endif

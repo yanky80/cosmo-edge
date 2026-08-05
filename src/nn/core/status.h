@@ -80,6 +80,12 @@ enum StatusCode {
     COSMO_NN_ERR_ASCEND_SYNC,
     COSMO_NN_ERR_ASCEND_BIND,
     COSMO_NN_ERR_ASCEND_RUN,
+
+    // ascend dvpp (image_to_tensor preprocessing)
+    COSMO_NN_ERR_ASCEND_DVPP_INIT = 0xB100,
+    COSMO_NN_ERR_ASCEND_DVPP_MEM,
+    COSMO_NN_ERR_ASCEND_DVPP_FORMAT,
+    COSMO_NN_ERR_ASCEND_DVPP_EXECUTE,
 };
 
 class PUBLIC Status {

@@ -386,7 +386,8 @@ endif()
 if(COSMO_NN_USE_ASCEND_BACKEND)
     list(APPEND COMMON_LIBS
         "${COSMO_ASCENDCL_LIB}"
-        "${COSMO_ASCEND_DVPP_LIB}")
+        "${COSMO_ASCEND_DVPP_LIB}"
+        "${COSMO_ASCEND_DVPP_MPI_LIB}")
 endif()
 
 ##########################################################
