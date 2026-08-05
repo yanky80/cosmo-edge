@@ -1,44 +1,42 @@
 ---
 title: Ascend310P3 YOLO26 OM 转换记录（ATC/AIPP）
-description: 与 OM 模型契约配套的可复现 ATC/AIPP 转换记录，包含 ONNX/OM 哈希、CANN 版本、完整参数与输入输出 metadata。
+description: 与 OM 模型契约配套的可复现 ATC/AIPP 转换记录，包含 ONNX/OM 哈希、CANN 版本、完整参数与输入输出 metadata，以及真机复验结果。
 ---
 
 # Ascend310P3 YOLO26 OM 转换记录
 
 本记录对应 `docs/development/ascend310p3-adaptation-plan.md` 的
-[OM 模型契约](#om-模型契约)：单一 `.om` 制品、固定 batch-1 NCHW FP16 输入、
-六个按 `reg0, cls0, reg1, cls1, reg2, cls2` 排序的 FP16 NCHW 输出。
-平台导入时用 AscendCL metadata 校验该契约。
+[OM 模型契约](#om-模型契约)。首期 310P3 契约为**单输出 end2end**（B 方案：
+NMS 固化进图，host 只做 letterbox 坐标恢复），不再是六路 raw heads；
+六路 raw-head 契约保留给 RK3588 INT8 路径。平台导入时用 AscendCL metadata
+校验该契约（见 `src/service/model/impl/ModelImporter.cc`）。
 
-## 转换记录（ATC 转换未执行）
+## 转换记录（2026-08-05，已在 310P3 真机执行）
 
-> 状态：**ATC 转换与哈希采集未执行：仓库/工作区中不存在 YOLO26 ONNX 基线文件
-> （`yolo26_det.onnx`），无可转换的输入**。`AGENTS.md` 记录的 310P3 测试机可达，
-> CANN/ATC 版本已在本记录下方实测回填；以下为可复现的转换与采集命令，ONNX 基线
-> 就绪后在测试机上执行并回填 ONNX/OM 哈希与输入输出 metadata。
+ONNX 基线由训练权重导出并完成 ATC 转换，全部命令在 310P3 测试机
+（`root@35623rcqc768.vicp.fun:1022`）执行。源文件：
 
-### 真机环境（已实测，2026-08-05）
+| 项目 | 路径 |
+| --- | --- |
+| 训练权重 | `/mnt/ml-storage/model/bjsubway-cam-260611/train/weights/best.pt`（yolo26m，960×960，6 类） |
+| 导出工作目录 | `/opt/convert/bjsubway-yolo26/`（测试机） |
+
+### ONNX 基线导出
+
+模型 Detect 头为 `end2end: True`（NMS 固化，`max_det=300`），因此导出即单输出
+`[1,300,6]`；CANN 8.0.0 的 ONNX parser 不支持 opset 19，使用 opset 12 导出：
 
 ```bash
 flock -w 1800 /tmp/cosmo-edge-ascend310p3-hw.lock -c \
   'ssh -o ConnectTimeout=10 -p 1022 root@35623rcqc768.vicp.fun \
-    "source /usr/local/Ascend/ascend-toolkit/set_env.sh && echo \$ASCEND_TOOLKIT_HOME && head -8 \${ASCEND_TOOLKIT_HOME}/version.cfg && ls \${ASCEND_TOOLKIT_HOME}/atc/bin/atc"'
+    "python3 -c \"from ultralytics import YOLO; YOLO(\\\"best.pt\\\").export(format=\\\"onnx\\\", imgsz=960, half=False, simplify=False, opset=12)\""'
 ```
 
 | 项目 | 值（实测） |
 | --- | --- |
-| Toolkit 根 | `/usr/local/Ascend/ascend-toolkit/latest` |
-| CANN 版本 | 8.0.0（`version.cfg`：runtime/compiler/hccl/opp/toolkit/aoe/ncs `[7.6.0.1.220:8.0.0]`） |
-| ATC | `${ASCEND_TOOLKIT_HOME}/atc/bin/atc`（存在；ATC 不支持 `--version`，版本以 `version.cfg` 为准） |
-
-### 基线输入
-
-| 项目 | 值 |
-| --- | --- |
-| ONNX 基线 | `yolo26_det.onnx`（六路 raw-head，输出名 `reg0/cls0/reg1/cls1/reg2/cls2`） |
-| ONNX SHA256 | `<待回填 sha256sum yolo26_det.onnx>`（ONNX 基线未就绪） |
-| 输入 | `[1,3,640,640]` FP16，固定 shape（ATC `--input-shape`） |
-| 输出 | `[1,4,80,80]`、`[1,1,80,80]`、`[1,4,40,40]`、`[1,1,40,40]`、`[1,4,20,20]`、`[1,1,20,20]` FP16 NCHW |
+| Ultralytics | 8.4.112（测试机 `python3`） |
+| ONNX opset | 12 |
+| ONNX SHA256 | `e5406bd45d70140a1d2931cee593db78949d3ee49c1369bf5e7b0f261148863a` |
 
 ### 转换命令
 
@@ -49,27 +47,38 @@ atc --model=yolo26_det.onnx \
     --soc_version=Ascend310P3 \
     --framework=5 \
     --input_format=NCHW \
-    --input_shape="images:1,3,640,640" \
+    --input_shape="images:1,3,960,960" \
     --output_type=FP16 \
-    --insert_op_conf=aipp_yolo26.cfg \
+    --input_fp16_nodes=images \
     --log=error
 ```
 
-| 项目 | 值 |
+| 项目 | 值（实测） |
 | --- | --- |
-| ATC 版本 | CANN 8.0.0（实测，见上表；ATC 不支持 `--version`） |
-| CANN 版本 | 8.0.0（实测，见上表） |
+| ATC 版本 | CANN 8.0.0（`version.cfg`：runtime/compiler/hccl/opp/toolkit/aoe/ncs `[7.6.0.1.220:8.0.0]`） |
+| CANN 版本 | 8.0.0（`/usr/local/Ascend/ascend-toolkit/latest`） |
 | 生成 OM | `model.om` |
-| OM SHA256 | `<待回填 sha256sum model.om>`（转换未执行） |
+| OM SHA256 | `e8a14da469c6fc4804be86f2687fc395d9d8fe44ff1aed0b57dc2bc6676d76f8` |
 
-### AIPP 配置（aipp_yolo26.cfg）
+> **可复现性说明**：ATC 转换耗时约 29s，重复转换的 OM 字节不完全一致
+> （实测两次 SHA256 分别为 `e8a14da4…` 与 `a73f3469…`，文件大小差 506B，
+> 为 ATC 写入的时间戳/版本信息），功能等价。本记录以首次转换哈希为准。
+
+### AIPP 配置（首期不使用）
+
+首期契约为固定 shape FP16 流水线：OM 输入保持 `images: NCHW FP16 [1,3,960,960]`，
+归一化与通道顺序由 `image_to_tensor`（host/DVPP 链路）负责，**不在 ATC 阶段插入
+static AIPP**。若后续 DVPP 直通需要 AIPP，则必须同步调整导入校验契约：
+插入 static AIPP 后 `aclmdlGetInputDims/Format/DataType` 报告的是 AIPP 输入格式
+（如 `RGB888_U8`），与 `NCHW FP16 [1,3,960,960]` 契约不一致。参考配置如下，使用前
+需按“转换记录 ↔ 导入校验”一致原则重新探测并回填：
 
 ```ini
 aipp_op {
   aipp_mode: static
   input_format: RGB888_U8
-  src_image_size_w: 640
-  src_image_size_h: 640
+  src_image_size_w: 960
+  src_image_size_h: 960
   csc_switch: true
   rbuv_swap_switch: false
   mean_chn_0: 0
@@ -81,42 +90,47 @@ aipp_op {
 }
 ```
 
-> AIPP 将 RGB888 U8 图像归一化到 `[0,1]` 并完成通道顺序固定；模型输入为
-> NCHW FP16。若真机 DVPP 直接产出 BGR，切换 `input_format` 与 `rbuv_swap_switch`
-> 并在转换记录中注明，保持归一化/通道顺序固定在该契约内。
-
-> **真机确认项**：插入 static AIPP 后，`aclmdlGetInputDims/Format/DataType` 报告的
-> 输入张量可能跟随 AIPP 输入（RGB888 U8 而非 NCHW FP16），与导入校验的
-> `NCHW FP16 [1,3,640,640]` 契约不一致。执行转换后必须在测试机读取 model.om 的
-> AscendCL 输入 metadata 并回填下表；若输入实际为 AIPP 输入格式，则调整 ATC 参数
-> （去掉 static AIPP、由 DVPP/宿主完成归一化与通道顺序，或按实际格式同步导入校验契约）
-> 后重新转换，保证“转换记录 ↔ 导入校验”两者一致。未确认前不得视为验收完成。
-
-### 输入输出 metadata 采集
-
-转换后按 AscendCL metadata 回填（与导入校验同一来源）：
+### 输入输出 metadata（AscendCL 实测）
 
 ```bash
-# 通过平台导入校验输出：stage=ascend/input/output 由 cosmo-engine 打印
-# 或临时以 aclmdlGetInputDims/aclmdlGetOutputDims 读取 model.om
+# /opt/convert/bjsubway-yolo26/om_probe2（aclmdlGetInputDims/OutputDims）
+./om_probe2 model.om
 ```
 
-| 张量 | shape | dtype | 布局 |
-| --- | --- | --- | --- |
-| images | 1,3,640,640 | FP16 | NCHW |
-| reg0 | 1,4,80,80 | FP16 | NCHW |
-| cls0 | 1,1,80,80 | FP16 | NCHW |
-| reg1 | 1,4,40,40 | FP16 | NCHW |
-| cls1 | 1,1,40,40 | FP16 | NCHW |
-| reg2 | 1,4,20,20 | FP16 | NCHW |
-| cls2 | 1,1,20,20 | FP16 | NCHW |
+| 张量 | 名称（runtime） | shape | dtype | 布局 | buffer size |
+| --- | --- | --- | --- | --- | --- |
+| 输入 | `images` | 1,3,960,960 | FP16 | NCHW | 5529600 B |
+| 输出 | `/model.23/Concat_6:0:output0` | 1,300,6 | FP16 | ND | 3600 B |
 
-## 复验命令（真机）
+> 输出 tensor 的 AscendCL runtime 名为 ATC 内部名 `/model.23/Concat_6:0:output0`，
+> 对应 ONNX 输出 `output0`。导入校验按 shape/dtype/format/count 匹配契约，
+> 不比对 runtime 名字；config.json 模板中的输出名沿用 ONNX 名 `output0`。
+> 输出语义为 end2end `[1, max_det, 6]`（每行 `x1,y1,x2,y2,score,class_id`），
+> 由 `yolo_e2e` 后处理节点消费（`yolo_e2e` 节点当前按 FP32 读取；
+> FP16 OM 输出的 FP16 读取是推理链路后续问题，不在本 issue 导入范围内）。
+
+## 真机复验（2026-08-05 已执行）
 
 ```bash
 flock -w 1800 /tmp/cosmo-edge-ascend310p3-hw.lock -c \
-  'ssh -o ConnectTimeout=10 -p 1022 root@35623rcqc768.vicp.fun "uname -a && npu-smi info"'
-source /usr/local/Ascend/ascend-toolkit/set_env.sh
-sha256sum yolo26_det.onnx model.om
-cat "${ASCEND_TOOLKIT_HOME}/version.cfg"
+  'ssh -o ConnectTimeout=10 -p 1022 root@35623rcqc768.vicp.fun \
+    "uname -a && npu-smi info | head -8 && sha256sum /opt/convert/bjsubway-yolo26/yolo26_det.onnx /opt/convert/bjsubway-yolo26/model.om && cat \${ASCEND_TOOLKIT_HOME}/version.cfg | head -4"'
 ```
+
+实测结果：
+
+- 主机：`Linux tjx-Default-string 5.15.0-25-generic x86_64`；`npu-smi 24.1.1.1`，
+  NPU 8（310P3，`0000:01:00.0`），Health OK。
+- `yolo26_det.onnx` SHA256 `e5406bd4…`；`model.om` SHA256 `e8a14da4…`。
+- CANN `version.cfg`：`runtime_running_version=[7.6.0.1.220:8.0.0]`。
+
+### 推理冒烟（已执行）
+
+```bash
+# /opt/convert/bjsubway-yolo26/om_run28：aclmdlLoadFromFile + aclmdlExecute，
+# 全零 FP16 输入
+./om_run28 model.om
+```
+
+实测结果：`aclmdlExecute ret=0`，输出 `[1,300,6]` FP16，全零输入下
+score>0.5 命中 0（符合预期），OM 可在 310P3 真实加载执行。
