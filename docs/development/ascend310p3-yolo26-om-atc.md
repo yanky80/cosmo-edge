@@ -148,3 +148,12 @@ AscendCL/DVPP）与定制 FFmpeg（`/opt/ffmpeg-4.4.1/ascend/include`，
 
 实测结果：`aclmdlExecute ret=0`，输出 `[1,300,6]` FP16，全零输入下
 score>0.5 命中 0（符合预期），OM 可在 310P3 真实加载执行。
+
+### 端到端视频检测（2026-08-06，Issue #31，已执行）
+
+同一 OM 经 `AscendImageToTensorNode`（DVPP letterbox + NV12→RGB888）喂入的
+host NV12 视频帧完成本地 H.264/H.265 检测：75/75 帧检出同一目标
+（`class=2 score≈0.947`），与 Ultralytics 同帧参考一致；空场景样本 165 帧 0
+检测，与 Ultralytics 一致。构建/运行命令与完整记录见
+`ascend310p3-adaptation-plan.md` 的 Issue #31 章节。OM 契约（FP16 NCHW
+960x960、0~1 RGB、`[1,300,6]` 输出）未改动。

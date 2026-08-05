@@ -431,6 +431,98 @@ smoke OK: 3 iteration(s), deterministic parsed detections on device 0
 736x960 才有检测，OM 固定 960x960 不接受），故改用 720p `sample_ascend.264`
 帧作为地面真值；这是输入侧问题，与推理链路无关。
 
+#### Issue #31：DVPP `image_to_tensor` 视频检测冒烟（2026-08-06，已执行）
+
+仓库新增 `AscendImageToTensorNode`（`src/nn/device/ascend/ascend_image_to_tensor_node.*`）：
+host NV12 `FrameSurface` → H2D 上传 → DVPP VPC 单任务完成「居中 letterbox + 等比缩放 +
+NV12→RGB888」（`hi_mpi_vpc_crop_resize_make_border`，RGB 边 114 直接由
+`scalar_value` 给定）→ D2H 下载 → host 侧 `/255` + FP16 NCHW `{1,3,960,960}`
+（`FloatToFp16` 四舍五入到最近偶数，`AscendNodeCreator` 注册
+`NODE_IMAGE_TO_TENSOR`）。上传 / DVPP / 下载 / 归一化分阶段计时并打日志，
+与 `AscendNetNode` 的 H2D+执行+同步+D2H 计时一起由冒烟程序逐帧输出；
+无软件解码、无 CPU resize 兜底。`AiComponment` 在 Ascend 后端下把 host NV12
+surface 直接包装为输入 blob（`MakeAscendSurfaceBlob`），不走 CPU 拷贝。
+
+真机排查得到两个 DVPP 关键修复（CANN 8.0 / `hi_dvpp` VPC）：
+
+1. **D2H 拷贝与 VPC 写竞争**：`hi_mpi_vpc_crop_resize_make_border` 提交后不等待
+   任务完成就 `aclrtMemcpy` D2H，读到的输出不完整（310P3 上典型表现为下半帧全 0，
+   首帧偶发全 0）。修复：提交后 `hi_mpi_vpc_get_process_result(chn, task_id, -1)`
+   阻塞等待任务完成再下载。
+2. **复用通道 16 任务后死锁**：SDK 的发送环不回收已完成任务，复用同一通道
+   连续提交会在第 16 次 `WaitForSend` 永久阻塞（`aclrtSynchronizeDevice` 无效，
+   因为 VPC 任务不在 ACL stream 上）。`get_process_result` 会弹出已完成任务，
+   环位随之释放；修复后单通道持久复用跑 165 帧无死锁，不再需要每帧
+   destroy/create 通道。
+
+冒烟程序 `test/ascend310p3/ascend_video_detect_smoke.cc` 直接驱动真实引擎路径：
+demux（文件/RTSP，`mp4toannexb`）→ `h264_ascend`/`h265_ascend` 硬解码 →
+Graph（`image_to_tensor_0`(DVPP) → `net_0`(AscendCL) → `yolo_e2e_decode_0`(host)），
+逐帧打印 `wall_delta` 与四段耗时，支持 `--dump-frame/--dump-file` 导出 FP16 张量。
+
+构建与运行（310P3 测试机 `/root/cosmo-edge-issue31`，rsync 自本分支；命令同时
+写在冒烟文件头注释）：
+
+```bash
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+ln -sfn /root/cosmo-edge-issue31/fmt-7.1.2 /root/cosmo-edge-issue31/3rd/fmt-7.1.2
+g++ -std=c++17 -O2 -DCOSMO_NN_USE_ASCEND_BACKEND -I src -I 3rd/fmt-7.1.2/include     -I"${ASCEND_TOOLKIT_HOME}/include" test/ascend310p3/ascend_video_detect_smoke.cc     src/nn/device/ascend/ascend_net_node.cc src/nn/device/ascend/ascend_node_creator.cc     src/nn/device/ascend/ascend_image_to_tensor_node.cc     src/nn/core/status.cc src/nn/core/blob.cc src/nn/core/blob_impl.cc     src/nn/core/abstract_device.cc src/nn/core/abstract_context.cc     src/nn/core/shared_resource.cc src/nn/core/blob_store.cc src/nn/core/graph.cc     src/nn/node/node.cc src/nn/node/net_node.cc src/nn/node/node_type_utils.cc     src/nn/node/node_creator.cc src/nn/node/input_node.cc src/nn/node/identity_node.cc     src/nn/node/yolo_e2e_decode_node.cc src/nn/utils/op.cc src/nn/utils/string_format.cc     src/nn/utils/timer.cc src/nn/utils/dims_vector_utils.cc     src/nn/utils/blob_memory_size_info.cc src/nn/utils/blob_memory_size_utils.cc     src/nn/utils/data_type_utils.cc src/nn/device/naive/naive_device.cc     src/nn/device/naive/naive_context.cc src/media/VideoDecoder.cc     src/media/VideoDecoderCreateAscend.cc src/media/VideoDecoderAscend.cc     src/media/VideoFrame.cc src/media/PixelFormatUtils.cc     src/mem/MemoryPoolMng.cc src/mem/FixedBlockPool.cc src/mem/AllocatorCpu.cc     src/mem/BlockFreqCalc.cc src/util/Thread.cc src/util/ThreadRegistry.cc     src/util/TimeUtil.cc 3rd/fmt-7.1.2/src/format.cc     -I/opt/ffmpeg-4.4.1/ascend/include -L/opt/ffmpeg-4.4.1/ascend/lib     -lavformat -lavcodec -lavutil -Wl,-rpath,/opt/ffmpeg-4.4.1/ascend/lib     -L"${ASCEND_TOOLKIT_HOME}/lib64" -lascendcl -lacl_dvpp -lacl_dvpp_mpi     -Wl,-rpath,"${ASCEND_TOOLKIT_HOME}/lib64" -lpthread -ldl -lm     -o ascend_video_detect_smoke
+```
+
+地面真值（同一帧直接对照 Ultralytics，避免预处理来源不一致）：
+
+```bash
+# 取一张地铁场景测试图（训练集 eval 图片，模型 conf=0.966 的检测样本），
+# 缩放编码成 1280x720 H.264 / H.265 各 75 帧
+ffmpeg -y -loop 1 -i upload_2261802601891843740_9b34f57f-6e5f-4860-92e3-a1c7d8abe735.jpg   -t 3 -r 25 -vf scale=1280:720 -pix_fmt yuv420p -c:v libx264 subway_test_h264.mp4
+ffmpeg -y -loop 1 -i upload_2261802601891843740_9b34f57f-6e5f-4860-92e3-a1c7d8abe735.jpg   -t 3 -r 25 -vf scale=1280:720 -pix_fmt yuv420p -c:v libx265 subway_test_h265.mp4
+# Ultralytics 对同一 1280x720 帧 imgsz=960 的参考检测：
+#   cls=2 conf=0.9363 xyxy=[304, 66, 1190.9, 473.7] → letterbox(0.75, pad_y=210)
+#   后 cxcywh = (560.6, 412.4, 665.2, 305.8)
+```
+
+运行结果（`uname -a`：`Linux tjx-Default-string 5.15.0-25-generic x86_64`；
+`npu-smi info`：310P3 Health OK，设备 0，`npu-smi 24.1.1.1`）：
+
+```text
+$ ./ascend_video_detect_smoke --om /opt/convert/bjsubway-yolo26/model.om     --video /tmp/subway_test_h264.mp4 --frames 75 --conf 0.25 --expect-detections
+video=/tmp/subway_test_h264.mp4 1280x720 codec=h264_ascend
+frame=74 wall_delta=36.50ms
+frame=74 e2e_graph=36.22ms image_to_tensor=17.19ms acl=19.01ms postprocess=0.00ms
+  det[0] cx=559.9 cy=417.1 w=666.2 h=299.8 score=0.9468 class=2
+  parsed_detections=1 (conf>=0.25)
+[h264_ascend] Decode hw send packet count is: 75.
+[h264_ascend] Decode hw out frame count is: 75.
+e2e=75 frames in 2.79s (26.9 fps incl. decode)
+detected_frames=75/75 (conf>=0.25)
+smoke OK
+
+$ ./ascend_video_detect_smoke --om /opt/convert/bjsubway-yolo26/model.om     --video /tmp/subway_test_h265.mp4 --frames 75 --conf 0.25 --expect-detections
+  det[0] cx=560.2 cy=416.9 w=667.5 h=300.2 score=0.9463 class=2
+e2e=75 frames in 2.77s (27.1 fps incl. decode)
+detected_frames=75/75 (conf>=0.25)
+smoke OK
+
+# 空场景样本（sample_ascend.264，全片无可检目标，与 Ultralytics 一致）
+$ ./ascend_video_detect_smoke --om /opt/convert/bjsubway-yolo26/model.om     --video /opt/ffmpeg-4.4.1/ascend/sample_ascend.264 --frames 165
+e2e=165 frames in 5.99s (27.6 fps incl. decode)
+detected_frames=0/165 (conf>=0.25)
+smoke OK
+```
+
+对照：DVPP 链路检测 `cxcywh=(559.9, 417.1, 666.2, 299.8) score=0.9468 class=2`
+与 Ultralytics 同帧参考 `(560.6, 412.4, 665.2, 305.8) score=0.9363 class=2`
+一致（FP16/DVPP 双线性与 Ultralytics INTER_AREA 的微小差异），证明
+NV12→RGB888 颜色顺序、letterbox 几何、`/255` 归一化与 OM 契约匹配。
+
+> 说明：Issue #29 记录的参考张量 `/tmp/input_sa164_0to1.f16`（Ultralytics
+> 预处理输出）经核对并不对应 `sample_ascend.264` 的任何一帧（该视频全片为空场景，
+> 系统 ffmpeg 与自定义 ascend ffmpeg 的 150~180 帧均与参考 PNG MAE≈37）；
+> 因此本 issue 改用「同一解码帧直接对照 Ultralytics」的地面真值，不引用该张量。
+
+RTSP 实时流检测与 `COSMO_TARGET_ARCH=aarch64`（经跳板机）冒烟：
+未执行（无主机访问权限）。
+
 RK3588 板回归：未执行。原 INT8 affine 路径由本地 `[yolo26]` INT8 用例覆盖且全绿；板端 SDK 缺少可用的 `librknnrt` sysroot，完整板端构建成本高，留给 RK3588 专项验证。
 
 用固定视频比较前 100 个有效帧与 ONNX FP32 基线：
