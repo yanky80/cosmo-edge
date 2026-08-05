@@ -124,6 +124,20 @@ flock -w 1800 /tmp/cosmo-edge-ascend310p3-hw.lock -c \
 - `yolo26_det.onnx` SHA256 `e5406bd4…`；`model.om` SHA256 `e8a14da4…`。
 - CANN `version.cfg`：`runtime_running_version=[7.6.0.1.220:8.0.0]`。
 
+### ascend310p3 profile 构建验证（已执行）
+
+```bash
+export PATH=/root/.cargo/bin:$PATH   # tokenizers_external 需要 Rust（测试机 /root/.cargo）
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+cmake -S . -B build_ascend -DCOSMO_TARGET_PLATFORM=ascend310p3 -DCOSMO_TARGET_ARCH=x86_64 -DCMAKE_BUILD_TYPE=Release
+cmake --build build_ascend --target cosmo_service -j8
+```
+
+实测结果：配置阶段找到真实 CANN SDK（`/usr/local/Ascend/ascend-toolkit/latest`，
+AscendCL/DVPP）与定制 FFmpeg（`/opt/ffmpeg-4.4.1/ascend/include`，
+见 `docs/development/ascend310p3-test-host-baseline.md`）；`cosmo_service`
+（含 `ModelImporter.cc` 的 AscendCL metadata loader）构建成功。
+
 ### 推理冒烟（已执行）
 
 ```bash
