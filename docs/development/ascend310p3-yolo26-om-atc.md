@@ -10,18 +10,33 @@ description: 与 OM 模型契约配套的可复现 ATC/AIPP 转换记录，包�
 六个按 `reg0, cls0, reg1, cls1, reg2, cls2` 排序的 FP16 NCHW 输出。
 平台导入时用 AscendCL metadata 校验该契约。
 
-## 转换记录（待真机执行）
+## 转换记录（ATC 转换未执行）
 
-> 状态：**未执行：无主机访问权限**。以下为可复现的转换与采集命令；取得 ONNX 基线后，
-> 在 `AGENTS.md` 记录的 310P3 测试机（CANN 8.0.0，ATC 位于
-> `${ASCEND_TOOLKIT_HOME}/atc/bin/atc`）上执行并回填哈希与版本。
+> 状态：**ATC 转换与哈希采集未执行：仓库/工作区中不存在 YOLO26 ONNX 基线文件
+> （`yolo26_det.onnx`），无可转换的输入**。`AGENTS.md` 记录的 310P3 测试机可达，
+> CANN/ATC 版本已在本记录下方实测回填；以下为可复现的转换与采集命令，ONNX 基线
+> 就绪后在测试机上执行并回填 ONNX/OM 哈希与输入输出 metadata。
+
+### 真机环境（已实测，2026-08-05）
+
+```bash
+flock -w 1800 /tmp/cosmo-edge-ascend310p3-hw.lock -c \
+  'ssh -o ConnectTimeout=10 -p 1022 root@35623rcqc768.vicp.fun \
+    "source /usr/local/Ascend/ascend-toolkit/set_env.sh && echo \$ASCEND_TOOLKIT_HOME && head -8 \${ASCEND_TOOLKIT_HOME}/version.cfg && ls \${ASCEND_TOOLKIT_HOME}/atc/bin/atc"'
+```
+
+| 项目 | 值（实测） |
+| --- | --- |
+| Toolkit 根 | `/usr/local/Ascend/ascend-toolkit/latest` |
+| CANN 版本 | 8.0.0（`version.cfg`：runtime/compiler/hccl/opp/toolkit/aoe/ncs `[7.6.0.1.220:8.0.0]`） |
+| ATC | `${ASCEND_TOOLKIT_HOME}/atc/bin/atc`（存在；ATC 不支持 `--version`，版本以 `version.cfg` 为准） |
 
 ### 基线输入
 
 | 项目 | 值 |
 | --- | --- |
 | ONNX 基线 | `yolo26_det.onnx`（六路 raw-head，输出名 `reg0/cls0/reg1/cls1/reg2/cls2`） |
-| ONNX SHA256 | `<待回填 sha256sum yolo26_det.onnx>` |
+| ONNX SHA256 | `<待回填 sha256sum yolo26_det.onnx>`（ONNX 基线未就绪） |
 | 输入 | `[1,3,640,640]` FP16，固定 shape（ATC `--input-shape`） |
 | 输出 | `[1,4,80,80]`、`[1,1,80,80]`、`[1,4,40,40]`、`[1,1,40,40]`、`[1,4,20,20]`、`[1,1,20,20]` FP16 NCHW |
 
@@ -42,10 +57,10 @@ atc --model=yolo26_det.onnx \
 
 | 项目 | 值 |
 | --- | --- |
-| ATC 版本 | CANN 8.0.0（`version.cfg` 为准，ATC 不支持 `--version`） |
-| CANN 版本 | 8.0.0（`${ASCEND_TOOLKIT_HOME}/version.cfg`） |
+| ATC 版本 | CANN 8.0.0（实测，见上表；ATC 不支持 `--version`） |
+| CANN 版本 | 8.0.0（实测，见上表） |
 | 生成 OM | `model.om` |
-| OM SHA256 | `<待回填 sha256sum model.om>` |
+| OM SHA256 | `<待回填 sha256sum model.om>`（转换未执行） |
 
 ### AIPP 配置（aipp_yolo26.cfg）
 
