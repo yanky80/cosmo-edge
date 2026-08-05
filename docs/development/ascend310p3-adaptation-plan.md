@@ -277,6 +277,15 @@ output layout: NCHW
 - `./cosmo-tests "[yolo26]"` → `All tests passed (120 assertions in 9 test cases)`。覆盖 FP16 黄金（阈值、三尺度、NMS、top-k、letterbox 坐标恢复）、FP32、混合 dtype / 头数量 / shape / 类别通道错误、非 NCHW layout 拒绝、NaN/Inf 跳过，以及 INT8 affine 回归。
 - `./cosmo-tests`（全量）→ 888 个用例中 887 个通过、1 个失败：`test_video_frame_proc_nv12.cc` 的 `NV12ToI420` 在 Ascend `libswscale.so.5` 的 `sws_scale` 内 SIGSEGV（该崩溃会让全量跑在随机顺序下提前终止，统计不稳定）。已用最小 standalone 程序在真机复现：NV12→YUV420P 三平面输出即崩；本地仓库自带 prebuild FFmpeg 下同一用例通过。属 Ascend FFmpeg swscale 的预存环境问题，与 Issue #27 改动（仅 `yolo26_raw_decode_node`、`detection_pipeline` 与其测试）无关，未在本 issue 修复。
 
+#### OM 契约探测与端到端推理冒烟（2026-08-05）
+
+- 模型：`/opt/convert/cam_p2_distill_ascend_model/best_Ascend310P3.om`（md5 `76104ca44c95c916de6e841a56deb786`，与旧目录 `cki_drone_ascend_model` 为同一文件）。
+- AscendCL 描述符探测（`aclmdlGetNumOutputs` / `aclmdlGetOutputFormat` / `aclmdlGetOutputDataType` / `aclmdlGetOutputDims`）：
+  - input：`dtype=FP32 format=NCHW dims=[1,3,960,960] size=11059200`
+  - output：`dtype=FP32 format=ND dims=[1,300,6] size=7200`（端到端输出，模型内已完成 NMS；`metadata.yaml` 的 `nms: false` 与实际制品不符，`/opt/convert/export_model.py` 硬编码 `nms=True`）。
+- 真实推理冒烟（`aclmdlLoadFromFile` + `aclmdlExecute`）：相机帧 1280x720 letterbox 到 960x960（RGB、/255）→ 检出 2 个框：`cls=3 铲车 score=0.9517`、`cls=1 混凝土罐车 score=0.2510`；输出结构与仓库现有 `yolo_e2e_postprocess` 路径（消费 [1,300,6]）匹配。
+- 结论：该 OM 证明 310P3 设备推理链路可用，但不能验证 Issue #27 的六路 FP16 raw-head host 解码——端到端输出绕开了本 issue 实现的解码。Issue #27 端到端验收需要 `nms=False` 且 reg/cls 分离的六路 raw-head OM 导出；当前目录无此制品，验证程序已留档在真机 `/tmp/om_probe.c`、`/tmp/om_run.c`，待 raw-head OM 就绪后执行。
+
 RK3588 板回归：未执行。原 INT8 affine 路径由本地 `[yolo26]` INT8 用例覆盖且全绿；板端 SDK 缺少可用的 `librknnrt` sysroot，完整板端构建成本高，留给 RK3588 专项验证。
 
 用固定视频比较前 100 个有效帧与 ONNX FP32 基线：
