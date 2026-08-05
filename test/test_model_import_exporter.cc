@@ -31,33 +31,55 @@ namespace fs = std::filesystem;
 namespace {
 
 nlohmann::json MakeRk3588Yolo26Config() {
-    return {
-        {"algorithm_code", "8888001"},
-        {"chip_type", "RK3588"},
-        {"model_type", "yolo26_det"},
-        {"version", "V1.0.0"},
-        {"models",
-         {{{"name", "rk_yolo26"},
-           {"file_name", "model.rknn"},
-           {"max_batch", 1},
-           {"inputs", {{{"name", "images"}, {"shape", {1, 640, 640, 3}}, {"data_type", 4}}}},
-           {"outputs",
-            {{{"name", "reg0"}, {"shape", {1, 4, 80, 80}}, {"data_type", 5}, {"scale", 0.5}, {"zero_point", 0}},
-             {{"name", "cls0"}, {"shape", {1, 1, 80, 80}}, {"data_type", 5}, {"scale", 0.1}, {"zero_point", 0}},
-             {{"name", "reg1"}, {"shape", {1, 4, 40, 40}}, {"data_type", 5}, {"scale", 0.5}, {"zero_point", 0}},
-             {{"name", "cls1"}, {"shape", {1, 1, 40, 40}}, {"data_type", 5}, {"scale", 0.1}, {"zero_point", 0}},
-             {{"name", "reg2"}, {"shape", {1, 4, 20, 20}}, {"data_type", 5}, {"scale", 0.5}, {"zero_point", 0}},
-             {{"name", "cls2"}, {"shape", {1, 1, 20, 20}}, {"data_type", 5}, {"scale", 0.1}, {"zero_point", 0}}}},
-           {"params",
-            {{"preprocess_mode", "image_to_tensor"},
-             {"output_format", "yolo26_raw"},
-             {"input_size", {640, 640}},
-             {"padding_color", {114, 114, 114}},
-             {"confidence_threshold", 0.25},
-             {"nms_threshold", 0.45},
-             {"top_k", 300},
-             {"reg_max", 1}}}}}}
-    };
+    return {{"algorithm_code", "8888001"},
+            {"chip_type", "RK3588"},
+            {"model_type", "yolo26_det"},
+            {"version", "V1.0.0"},
+            {"models",
+             {{{"name", "rk_yolo26"},
+               {"file_name", "model.rknn"},
+               {"max_batch", 1},
+               {"inputs", {{{"name", "images"}, {"shape", {1, 640, 640, 3}}, {"data_type", 4}}}},
+               {"outputs",
+                {{{"name", "reg0"},
+                  {"shape", {1, 4, 80, 80}},
+                  {"data_type", 5},
+                  {"scale", 0.5},
+                  {"zero_point", 0}},
+                 {{"name", "cls0"},
+                  {"shape", {1, 1, 80, 80}},
+                  {"data_type", 5},
+                  {"scale", 0.1},
+                  {"zero_point", 0}},
+                 {{"name", "reg1"},
+                  {"shape", {1, 4, 40, 40}},
+                  {"data_type", 5},
+                  {"scale", 0.5},
+                  {"zero_point", 0}},
+                 {{"name", "cls1"},
+                  {"shape", {1, 1, 40, 40}},
+                  {"data_type", 5},
+                  {"scale", 0.1},
+                  {"zero_point", 0}},
+                 {{"name", "reg2"},
+                  {"shape", {1, 4, 20, 20}},
+                  {"data_type", 5},
+                  {"scale", 0.5},
+                  {"zero_point", 0}},
+                 {{"name", "cls2"},
+                  {"shape", {1, 1, 20, 20}},
+                  {"data_type", 5},
+                  {"scale", 0.1},
+                  {"zero_point", 0}}}},
+               {"params",
+                {{"preprocess_mode", "image_to_tensor"},
+                 {"output_format", "yolo26_raw"},
+                 {"input_size", {640, 640}},
+                 {"padding_color", {114, 114, 114}},
+                 {"confidence_threshold", 0.25},
+                 {"nms_threshold", 0.45},
+                 {"top_k", 300},
+                 {"reg_max", 1}}}}}}};
 }
 
 ModelImportExporter::RknnModelMetadata MakeRknnYolo26Metadata() {
@@ -72,6 +94,36 @@ ModelImportExporter::RknnModelMetadata MakeRknnYolo26Metadata() {
         Tensor{"reg2", {1, 4, 20, 20}, "NCHW", "INT8", "AFFINE", 0, 0.5F},
         Tensor{"cls2", {1, 1, 20, 20}, "NCHW", "INT8", "AFFINE", 0, 0.1F},
     };
+    return metadata;
+}
+
+nlohmann::json MakeAscend310P3Yolo26Config() {
+    return {{"algorithm_code", "8888002"},
+            {"chip_type", "ASCEND310P3"},
+            {"model_type", "yolo26_det"},
+            {"version", "V1.0.0"},
+            {"models",
+             {{{"name", "ascend_yolo26"},
+               {"file_name", "model.om"},
+               {"max_batch", 1},
+               {"inputs", {{{"name", "images"}, {"shape", {1, 3, 960, 960}}, {"data_type", 2}}}},
+               {"outputs",
+                {{{"name", "output0"}, {"shape", {1, 300, 6}}, {"data_type", 2}}}},
+               {"params",
+                {{"preprocess_mode", "image_to_tensor"},
+                 {"output_format", "yolo_e2e"},
+                 {"input_size", {960, 960}},
+                 {"padding_color", {114, 114, 114}},
+                 {"confidence_threshold", 0.25},
+                 {"nms_threshold", 0.45},
+                 {"top_k", 300}}}}}}};
+}
+
+ModelImportExporter::AscendModelMetadata MakeAscendYolo26Metadata() {
+    using Tensor = ModelImportExporter::TensorMetadata;
+    ModelImportExporter::AscendModelMetadata metadata;
+    metadata.inputs.push_back({"images", {1, 3, 960, 960}, "NCHW", "FP16", "NONE", 0, 0.0F});
+    metadata.outputs = {Tensor{"output0", {1, 300, 6}, "ND", "FP16", "NONE", 0, 0.0F}};
     return metadata;
 }
 
@@ -469,13 +521,15 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
              {{"algorithm_code", "1111111"},
               {"chip_type", cosmo::util::kEngineType},
               {"version", "V1.0.0"},
-              {"models", {{{"name", "Broken"}, {"file_name", "missing" + std::string(cosmo::util::kModelFileExt)}}}}},
+              {"models",
+               {{{"name", "Broken"}, {"file_name", "missing" + std::string(cosmo::util::kModelFileExt)}}}}},
              {}},
             {"escaping file_name",
              {{"algorithm_code", "1111112"},
               {"chip_type", cosmo::util::kEngineType},
               {"version", "V1.0.0"},
-              {"models", {{{"name", "Broken"}, {"file_name", "../escape" + std::string(cosmo::util::kModelFileExt)}}}}},
+              {"models",
+               {{{"name", "Broken"}, {"file_name", "../escape" + std::string(cosmo::util::kModelFileExt)}}}}},
              {{"model" + std::string(cosmo::util::kModelFileExt), "fake"}}},
             {"duplicate file_name",
              {{"algorithm_code", "1111113"},
@@ -528,14 +582,14 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
 
         struct CaseSpec {
             std::string label;
-            std::function<void(nlohmann::json&, ModelImportExporter::RknnModelMetadata&, std::string&)> mutate;
+            std::function<void(nlohmann::json&, ModelImportExporter::RknnModelMetadata&, std::string&)>
+                mutate;
             std::string expected_stage;
         };
 
         const std::vector<CaseSpec> cases = {
             {"valid metadata fixture",
-             [](nlohmann::json&, ModelImportExporter::RknnModelMetadata&, std::string&) {},
-             ""},
+             [](nlohmann::json&, ModelImportExporter::RknnModelMetadata&, std::string&) {}, ""},
             {"unsupported model type",
              [](nlohmann::json& config, ModelImportExporter::RknnModelMetadata&, std::string&) {
                  config["model_type"] = "yolov8_det";
@@ -595,9 +649,8 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
                 });
 
             std::string error;
-            const bool valid =
-                importExporter.ValidateModelPackageContract((package_dir / "config.json").string(),
-                                                           package_dir.string(), error);
+            const bool valid = importExporter.ValidateModelPackageContract(
+                (package_dir / "config.json").string(), package_dir.string(), error);
             if (spec.expected_stage.empty()) {
                 REQUIRE(valid);
                 REQUIRE(error.empty());
@@ -606,6 +659,198 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
                 REQUIRE(error.find(spec.expected_stage) != std::string::npos);
             }
         }
+
+        fs::remove_all(package_dir);
+    }
+
+    SECTION(
+        "ASCEND310P3 YOLO26 package validation accepts the fixed-shape FP16 contract and rejects "
+        "mismatches") {
+        const fs::path package_dir = fs::path(testRoot) / "ascend310p3_yolo26_package";
+        fs::remove_all(package_dir);
+        fs::create_directories(package_dir);
+        std::ofstream(package_dir / "model.om") << "fake-om";
+
+        struct CaseSpec {
+            std::string label;
+            std::function<void(nlohmann::json&, ModelImportExporter::AscendModelMetadata&, std::string&)>
+                mutate;
+            std::string expected_stage;
+        };
+
+        const std::vector<CaseSpec> cases = {
+            {"valid metadata fixture",
+             [](nlohmann::json&, ModelImportExporter::AscendModelMetadata&, std::string&) {}, ""},
+            {"unsupported model type",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["model_type"] = "yolov8_det";
+             },
+             "stage=config"},
+            {"missing explicit artifact",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["file_name"] = "";
+             },
+             "stage=artifact"},
+            {"wrong artifact extension",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["file_name"] = "model.rknn";
+             },
+             "stage=artifact"},
+            {"mixed platform artifacts",
+             [&package_dir](nlohmann::json&, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 std::ofstream(package_dir / "extra.onnx") << "wrong-platform";
+             },
+             "stage=artifact"},
+            {"missing input tensor",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["inputs"].erase(config["models"][0]["inputs"].begin());
+             },
+             "stage=config"},
+            {"missing output tensor",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["outputs"].erase(config["models"][0]["outputs"].begin());
+             },
+             "stage=config"},
+            {"multiple output tensors",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["outputs"].push_back(
+                     {{"name", "output1"}, {"shape", {1, 300, 6}}, {"data_type", 2}});
+             },
+             "stage=config"},
+            {"wrong output_format",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["params"]["output_format"] = "yolo26_ultralytics";
+             },
+             "stage=config"},
+            {"missing preprocess_mode",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["params"].erase("preprocess_mode");
+             },
+             "stage=config"},
+            {"missing input_size",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["params"].erase("input_size");
+             },
+             "stage=config"},
+            {"bad input dtype",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["inputs"][0]["data_type"] = 5;
+             },
+             "stage=config"},
+            {"bad input shape",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["inputs"][0]["shape"] = {1, 960, 960, 3};
+             },
+             "stage=config"},
+            {"bad output dtype",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["outputs"][0]["data_type"] = 0;
+             },
+             "stage=config"},
+            {"bad output row count",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["outputs"][0]["shape"] = {1, 100, 6};
+             },
+             "stage=config"},
+            {"bad output column count",
+             [](nlohmann::json& config, ModelImportExporter::AscendModelMetadata&, std::string&) {
+                 config["models"][0]["outputs"][0]["shape"] = {1, 300, 7};
+             },
+             "stage=config"},
+            {"runtime input mismatch",
+             [](nlohmann::json&, ModelImportExporter::AscendModelMetadata& metadata, std::string&) {
+                 metadata.inputs[0].type = "INT8";
+             },
+             "stage=input"},
+            {"runtime input format mismatch",
+             [](nlohmann::json&, ModelImportExporter::AscendModelMetadata& metadata, std::string&) {
+                 metadata.inputs[0].format = "NHWC";
+             },
+             "stage=input"},
+            {"runtime input shape mismatch",
+             [](nlohmann::json&, ModelImportExporter::AscendModelMetadata& metadata, std::string&) {
+                 metadata.inputs[0].dims = {1, 3, 640, 640};
+             },
+             "stage=input"},
+            {"runtime output mismatch",
+             [](nlohmann::json&, ModelImportExporter::AscendModelMetadata& metadata, std::string&) {
+                 metadata.outputs[0].dims = {1, 300, 5};
+             },
+             "stage=output[0]"},
+            {"runtime output dtype mismatch",
+             [](nlohmann::json&, ModelImportExporter::AscendModelMetadata& metadata, std::string&) {
+                 metadata.outputs[0].type = "FP32";
+             },
+             "stage=output[0]"},
+            {"runtime output format mismatch",
+             [](nlohmann::json&, ModelImportExporter::AscendModelMetadata& metadata, std::string&) {
+                 metadata.outputs[0].format = "NCHW";
+             },
+             "stage=output[0]"},
+            {"runtime output count mismatch",
+             [](nlohmann::json&, ModelImportExporter::AscendModelMetadata& metadata, std::string&) {
+                 metadata.outputs.push_back(
+                     ModelImportExporter::TensorMetadata{"output1", {1, 300, 6}, "ND", "FP16", "NONE", 0, 0.0F});
+             },
+             "stage=ascend"},
+            {"runtime loader failure includes stage",
+             [](nlohmann::json&, ModelImportExporter::AscendModelMetadata&, std::string& loader_error) {
+                 loader_error = "aclmdlLoadFromFile ret=-1";
+             },
+             "stage=ascend"},
+        };
+
+        for (const auto& spec : cases) {
+            INFO(spec.label);
+            fs::remove(package_dir / "extra.onnx");
+
+            auto config   = MakeAscend310P3Yolo26Config();
+            auto metadata = MakeAscendYolo26Metadata();
+            std::string loader_error;
+            spec.mutate(config, metadata, loader_error);
+
+            std::ofstream(package_dir / "config.json") << config.dump();
+            importExporter.SetAscendMetadataLoaderForTest(
+                [metadata, loader_error](const std::string&, ModelImportExporter::AscendModelMetadata& out,
+                                         std::string& error) mutable {
+                    if (!loader_error.empty()) {
+                        error = loader_error;
+                        return false;
+                    }
+                    out = metadata;
+                    return true;
+                });
+
+            std::string error;
+            const bool valid = importExporter.ValidateModelPackageContract(
+                (package_dir / "config.json").string(), package_dir.string(), error);
+            if (spec.expected_stage.empty()) {
+                REQUIRE(valid);
+                REQUIRE(error.empty());
+            } else {
+                REQUIRE_FALSE(valid);
+                REQUIRE(error.find(spec.expected_stage) != std::string::npos);
+            }
+        }
+
+        fs::remove_all(package_dir);
+    }
+
+    SECTION("import validation rejects chip types outside the compiled platform profile") {
+        const fs::path package_dir = fs::path(testRoot) / "wrong_chip_package";
+        fs::remove_all(package_dir);
+        fs::create_directories(package_dir);
+        std::ofstream(package_dir / "model.om") << "fake-om";
+
+        auto config         = MakeAscend310P3Yolo26Config();
+        config["chip_type"] = "UNKNOWN_CHIP";
+        std::ofstream(package_dir / "config.json") << config.dump();
+
+        std::string alg_code;
+        std::string error;
+        REQUIRE_FALSE(importExporter.ValidateImportedModelPackage(package_dir.string(), alg_code, error));
+        REQUIRE(error.find("stage=platform") != std::string::npos);
+        REQUIRE(error.find("unsupported chip_type=UNKNOWN_CHIP") != std::string::npos);
 
         fs::remove_all(package_dir);
     }
@@ -702,9 +947,8 @@ TEST_CASE("ModelImportExporter Tests", "[model]") {
         std::ofstream(archiveDir + "/model" + std::string(cosmo::util::kModelFileExt)) << "fake";
 
         const std::string archivePath = testUploadDir + "/unsafe_flat.tar.gz";
-        const std::string command =
-            "tar -czf " + archivePath + " -C " + archiveDir + " config.json model" +
-            std::string(cosmo::util::kModelFileExt);
+        const std::string command = "tar -czf " + archivePath + " -C " + archiveDir + " config.json model" +
+                                    std::string(cosmo::util::kModelFileExt);
         REQUIRE(system(command.c_str()) == 0);
 
         REQUIRE(importExporter.ImportModel(archivePath) == cosmo::util::ErrorEnum::InvalidParam);

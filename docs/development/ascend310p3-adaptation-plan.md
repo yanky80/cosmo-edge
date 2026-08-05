@@ -124,7 +124,7 @@ CPU resize。先建立可复现的正确性和性能基线。
 模型加载时：
 
 1. 加载 OM 并取得 `aclmdlDesc`。
-2. 校验一个固定 batch 输入和六个 FP16 输出。
+2. 校验一个固定 batch 输入和一个 FP16 输出（见 OM 模型契约）。
 3. 读取输入输出名称、shape、dtype 和 buffer size。
 4. 一次性创建 dataset 和输入输出 buffer，后续推理复用。
 
@@ -133,8 +133,8 @@ CPU resize。先建立可复现的正确性和性能基线。
 1. 将预处理结果绑定或复制到模型输入。
 2. 在实例 stream 上执行模型。
 3. 同步 stream。
-4. 将六路输出复制到 host Blob。
-5. 交给通用 YOLO26 raw 后处理节点。
+4. 将单张输出复制到 host Blob。
+5. 交给 `yolo_e2e` 后处理节点（端到端输出已含 NMS，host 只做坐标恢复）。
 
 错误日志必须包含失败阶段、device id、模型路径、tensor 描述和底层 ACL 错误码。
 设备不可用、模型不匹配或执行失败时任务明确失败，不切换到 ONNX Runtime。
@@ -173,26 +173,31 @@ Ascend `image_to_tensor` 节点负责：
 > 直接消费 Ultralytics 导出(或 ATC 转换后)的单张后处理输出,host 只做
 > NMS/top-k/letterbox 坐标恢复。六路 raw-head 契约保留给 RK3588 INT8 路径。
 
-首期从同一 YOLO26 ONNX 基线生成 FP16 OM：
+首期从 YOLO26 end2end ONNX 基线生成 FP16 OM（真实模型 Detect 头 `end2end: True`，
+NMS 已固化，导出即单输出 `[1, max_det, 6]`）：
 
 ```text
 ATC soc_version: Ascend310P3
-input: batch=1, 640x640, fixed shape
-outputs: reg0, cls0, reg1, cls1, reg2, cls2
-output dtype: FP16
-output layout: NCHW
+input: images, batch=1, 960x960, fixed shape, NCHW FP16
+output: output0, [1, 300, 6], ND FP16（end2end：x1,y1,x2,y2,score,class_id）
 ```
+
+> B 方案（2026-08-05 决策）：310P3 算力强于 RK3588，不要求 OM 导出六路 raw heads；
+> 直接消费图内已完成的解码/NMS 输出，host 只做 top-k 与 letterbox 坐标恢复。
+> 六路 raw-head 契约保留给 RK3588 INT8 路径。若后续接入非 end2end 的
+> Ultralytics 导出（`[1, 4+nc, N]` channel-major），`output_format` 使用
+> `yolo26_ultralytics`，由 `yolo26_ultralytics_postprocess` 解码（PR #36 已实现）。
 
 模型转换记录必须包含：
 
 - 原始 ONNX SHA256。
 - ATC、CANN 版本。
-- 完整 ATC 参数和 AIPP 配置。
+- 完整 ATC 参数和 AIPP 配置（首期不插入 static AIPP，见 ATC 记录）。
 - 生成 OM SHA256。
-- 六路输入输出 metadata。
+- 输入输出 metadata。
 
 首期只记录一条可复现 ATC 命令，不建设模型转换框架。仅当多个模型需要稳定批量转换时，
-再增加转换脚本。
+再增加转换脚本。完整转换记录见 `docs/development/ascend310p3-yolo26-om-atc.md`。
 
 模型包必须满足：
 
@@ -204,35 +209,17 @@ output layout: NCHW
     {
       "file_name": "model.om",
       "max_batch": 1,
+      "inputs": [
+        { "name": "images", "shape": [1, 3, 960, 960], "data_type": 2 }
+      ],
+      "outputs": [
+        { "name": "output0", "shape": [1, 300, 6], "data_type": 2 }
+      ],
       "params": {
         "preprocess_mode": "image_to_tensor",
-        "output_format": "yolo26_raw",
-        "input_size": [640, 640],
-        "padding_color": [114, 114, 114],
-        "confidence_threshold": 0.25,
-        "nms_threshold": 0.45,
-        "top_k": 300,
-        "reg_max": 1
-      }
-    }
-  ]
-}
-```
-
-310P3 B 方案(Ultralytics 单输出)配置:把 `output_format` 改为 `yolo26_ultralytics`,
-`reg_max` 不适用:
-
-```json
-{
-  "chip_type": "ASCEND310P3",
-  "model_type": "yolo26_det",
-  "models": [
-    {
-      "file_name": "model.om",
-      "max_batch": 1,
-      "params": {
-        "output_format": "yolo26_ultralytics",
+        "output_format": "yolo_e2e",
         "input_size": [960, 960],
+        "padding_color": [114, 114, 114],
         "confidence_threshold": 0.25,
         "nms_threshold": 0.45,
         "top_k": 300
@@ -242,8 +229,8 @@ output layout: NCHW
 }
 ```
 
-包内只允许一个显式 `.om` 制品。导入时通过 AscendCL metadata 校验输入、六路输出、
-固定 batch、shape 和 FP16 dtype。
+包内只允许一个显式 `.om` 制品。导入时通过 AscendCL metadata 校验一个固定 batch-1
+输入、一个输出、固定 shape `[1,300,6]`、ND format 与 FP16 dtype（`data_type` 2 = HALF）。
 
 ## FP16 raw 后处理
 

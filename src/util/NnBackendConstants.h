@@ -69,7 +69,30 @@ static constexpr const char* kEngineType = "RK3588";
 static constexpr const char* kModelFileExt = ".rknn";
 
 static constexpr const char* kCompatibleModelFileExts[] = {".rknn"};
-static constexpr const char* kSupportedChips[] = {"RK3588"};
+static constexpr const char* kSupportedChips[]          = {"RK3588"};
+
+#elif defined(COSMO_NN_USE_ASCEND_BACKEND)
+
+/// Directory prefix for Ascend 310P3 model directories: "prod_ASCEND310P3_".
+static constexpr const char* kPlatformDirPrefix = "prod_ASCEND310P3_";
+
+/// Prefix used when generating new Ascend 310P3 model directories.
+static constexpr const char* kNewDirPrefix = "prod_ASCEND310P3_";
+
+/// Regex pattern to extract algorithm code from Ascend 310P3 model directory names.
+static constexpr const char* kPlatformDirRegex = "prod_[A-Z0-9]+_([0-9]+)_.*";
+
+/// Engine type identifier reported to frontend / device info API.
+static constexpr const char* kEngineType = "ASCEND310P3";
+
+/// Model binary file extension for the Ascend backend (.om from ATC).
+static constexpr const char* kModelFileExt = ".om";
+
+/// Compatibility extensions accepted for Ascend model packages.
+static constexpr const char* kCompatibleModelFileExts[] = {".om"};
+
+/// Supported Ascend chip types, as written to config.json "chip_type".
+static constexpr const char* kSupportedChips[] = {"ASCEND310P3"};
 
 #elif defined(COSMO_NN_USE_CPU_BACKEND)
 
@@ -97,7 +120,8 @@ static constexpr const char* kCompatibleModelFileExts[] = {".onnx"};
 static constexpr const char* kSupportedChips[] = {"X86"};
 
 #else
-#error "Either COSMO_NN_USE_SOPHON_BACKEND or COSMO_NN_USE_CPU_BACKEND must be defined"
+#error                                                                                                       \
+    "One of COSMO_NN_USE_SOPHON_BACKEND, COSMO_NN_USE_RKNN_BACKEND, COSMO_NN_USE_ASCEND_BACKEND, or COSMO_NN_USE_CPU_BACKEND must be defined"
 #endif
 
 /// Case-insensitive check whether `chip` is a supported chip/platform type for the
