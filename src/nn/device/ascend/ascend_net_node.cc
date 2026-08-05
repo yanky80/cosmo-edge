@@ -18,69 +18,37 @@ namespace cosmo::nn {
 
 namespace {
 
-constexpr int kAscendDeviceId = 0;  // Phase-1 contract: single device 0.
-
-std::string AclDataTypeName(aclDataType type) {
-    switch (type) {
-        case ACL_FLOAT:
-            return "FP32";
-        case ACL_FLOAT16:
-            return "FP16";
-        case ACL_INT8:
-            return "INT8";
-        case ACL_INT32:
-            return "INT32";
-        case ACL_UINT8:
-            return "UINT8";
-        case ACL_BF16:
-            return "BF16";
-        default:
-            return "UNKNOWN";
-    }
-}
-
-std::string AclFormatName(aclFormat format) {
-    switch (format) {
-        case ACL_FORMAT_NCHW:
-            return "NCHW";
-        case ACL_FORMAT_NHWC:
-            return "NHWC";
-        case ACL_FORMAT_ND:
-            return "ND";
-        default:
-            return "UNDEFINED";
-    }
-}
-
-float Fp16ToFloat(uint16_t value) {
-    const uint32_t sign     = static_cast<uint32_t>(value & 0x8000U) << 16U;
-    const uint32_t exponent = (value >> 10U) & 0x1fU;
-    const uint32_t mantissa = value & 0x03ffU;
-    uint32_t bits           = 0;
-    if (exponent == 0) {
-        if (mantissa == 0) {
-            bits = sign;
-        } else {
-            uint32_t normalized_mantissa = mantissa;
-            int shift                    = 0;
-            while ((normalized_mantissa & 0x0400U) == 0U) {
-                normalized_mantissa <<= 1U;
-                ++shift;
-            }
-            normalized_mantissa &= 0x03ffU;
-            const uint32_t normalized_exponent = static_cast<uint32_t>(127 - 14 - shift);
-            bits = sign | (normalized_exponent << 23U) | (normalized_mantissa << 13U);
+    std::string AclDataTypeName(aclDataType type) {
+        switch (type) {
+            case ACL_FLOAT:
+                return "FP32";
+            case ACL_FLOAT16:
+                return "FP16";
+            case ACL_INT8:
+                return "INT8";
+            case ACL_INT32:
+                return "INT32";
+            case ACL_UINT8:
+                return "UINT8";
+            case ACL_BF16:
+                return "BF16";
+            default:
+                return "UNKNOWN";
         }
-    } else if (exponent == 0x1fU) {
-        bits = sign | 0x7f800000U | (mantissa << 13U);
-    } else {
-        bits = sign | ((exponent + (127U - 15U)) << 23U) | (mantissa << 13U);
     }
 
-    float result = 0.0F;
-    std::memcpy(&result, &bits, sizeof(result));
-    return result;
-}
+    std::string AclFormatName(aclFormat format) {
+        switch (format) {
+            case ACL_FORMAT_NCHW:
+                return "NCHW";
+            case ACL_FORMAT_NHWC:
+                return "NHWC";
+            case ACL_FORMAT_ND:
+                return "ND";
+            default:
+                return "UNDEFINED";
+        }
+    }
 
 }  // namespace
 
@@ -131,15 +99,15 @@ Status AscendNetNode::LoadWeight(const char* data, size_t size) {
 
     const aclError init_ret = ascend::EnsureAclInitialized();
     if (init_ret != ACL_SUCCESS)
-        return MakeAclStatus(COSMO_NN_ERR_ASCEND_INIT, "aclInit",
-                             "model_bytes=" + std::to_string(size), init_ret);
+        return MakeAclStatus(COSMO_NN_ERR_ASCEND_INIT, "aclInit", "model_bytes=" + std::to_string(size),
+                             init_ret);
 
-    aclError ret = aclrtSetDevice(device_id_);
-    if (ret != ACL_SUCCESS)
-        return MakeAclStatus(COSMO_NN_ERR_ASCEND_DEVICE, "aclrtSetDevice", "", ret);
+    const aclError dev_ret = ascend::AcquireDevice(device_id_);
+    if (dev_ret != ACL_SUCCESS)
+        return MakeAclStatus(COSMO_NN_ERR_ASCEND_DEVICE, "aclrtSetDevice", "", dev_ret);
     device_set_ = true;
 
-    ret = aclrtCreateContext(&context_, device_id_);
+    aclError ret = aclrtCreateContext(&context_, device_id_);
     if (ret != ACL_SUCCESS) {
         Destroy();
         return MakeAclStatus(COSMO_NN_ERR_ASCEND_CONTEXT, "aclrtCreateContext", "", ret);
@@ -165,9 +133,8 @@ Status AscendNetNode::LoadWeight(const char* data, size_t size) {
     desc_ = aclmdlCreateDesc();
     if (desc_ == nullptr) {
         Destroy();
-        return Status(COSMO_NN_ERR_ASCEND_QUERY,
-                      "stage=ascend-query device=" + std::to_string(device_id_) + " model=" +
-                          GetModelPath() + " aclmdlCreateDesc failed");
+        return Status(COSMO_NN_ERR_ASCEND_QUERY, "stage=ascend-query device=" + std::to_string(device_id_) +
+                                                     " model=" + GetModelPath() + " aclmdlCreateDesc failed");
     }
     ret = aclmdlGetDesc(desc_, model_id_);
     if (ret != ACL_SUCCESS) {
@@ -192,16 +159,19 @@ Status AscendNetNode::QueryModel() {
     const size_t num_inputs  = aclmdlGetNumInputs(desc_);
     const size_t num_outputs = aclmdlGetNumOutputs(desc_);
     if (num_inputs != 1) {
-        return Status(COSMO_NN_ERR_ASCEND_QUERY,
-                      "Ascend model contract mismatch model=" + GetModelPath() + " inputs=" +
-                          std::to_string(num_inputs) + " expected 1 input");
+        return Status(COSMO_NN_ERR_ASCEND_QUERY, "Ascend model contract mismatch model=" + GetModelPath() +
+                                                     " inputs=" + std::to_string(num_inputs) +
+                                                     " expected 1 input");
     }
     if (num_outputs == 0) {
-        return Status(COSMO_NN_ERR_ASCEND_QUERY,
-                      "Ascend model has no outputs model=" + GetModelPath());
+        return Status(COSMO_NN_ERR_ASCEND_QUERY, "Ascend model has no outputs model=" + GetModelPath());
+    }
+    if (num_outputs != 1) {
+        return Status(COSMO_NN_ERR_ASCEND_QUERY, "Ascend model contract mismatch model=" + GetModelPath() +
+                                                     " outputs=" + std::to_string(num_outputs) +
+                                                     " expected 1 output");
     }
 
-    input_shapes_.clear();
     input_sizes_.clear();
     input_types_.clear();
     for (size_t i = 0; i < num_inputs; ++i) {
@@ -211,8 +181,8 @@ Status AscendNetNode::QueryModel() {
             return MakeAclStatus(COSMO_NN_ERR_ASCEND_QUERY, "aclmdlGetInputDims",
                                  "tensor=input[" + std::to_string(i) + "]", ret);
         const size_t bytes = aclmdlGetInputSizeByIndex(desc_, i);
-        if (io_dims.dimCount != 4 || io_dims.dims[0] != 1 || io_dims.dims[1] <= 0 ||
-            io_dims.dims[2] <= 0 || io_dims.dims[3] <= 0 || bytes == 0) {
+        if (io_dims.dimCount != 4 || io_dims.dims[0] != 1 || io_dims.dims[1] <= 0 || io_dims.dims[2] <= 0 ||
+            io_dims.dims[3] <= 0 || bytes == 0) {
             return Status(COSMO_NN_ERR_ASCEND_QUERY,
                           "Ascend input must be a fixed-batch 4D tensor model=" + GetModelPath() + " " +
                               TensorDescription("input", i, io_dims, aclmdlGetInputDataType(desc_, i),
@@ -230,8 +200,6 @@ Status AscendNetNode::QueryModel() {
                               TensorDescription("input", i, io_dims, aclmdlGetInputDataType(desc_, i),
                                                 aclmdlGetInputFormat(desc_, i), bytes));
         }
-        input_shapes_.push_back({static_cast<int>(io_dims.dims[0]), static_cast<int>(io_dims.dims[1]),
-                                 static_cast<int>(io_dims.dims[2]), static_cast<int>(io_dims.dims[3])});
         input_sizes_.push_back(bytes);
         input_types_.push_back(aclmdlGetInputDataType(desc_, i));
     }
@@ -246,9 +214,11 @@ Status AscendNetNode::QueryModel() {
             return MakeAclStatus(COSMO_NN_ERR_ASCEND_QUERY, "aclmdlGetOutputDims",
                                  "tensor=output[" + std::to_string(i) + "]", ret);
         const size_t bytes = aclmdlGetOutputSizeByIndex(desc_, i);
-        if (io_dims.dimCount < 2 || io_dims.dims[0] != 1 || bytes == 0) {
+        // Phase-1 contract: yolo26 end2end single output [1, max_det, 6]
+        // (each row is x1,y1,x2,y2,score,class_id).
+        if (io_dims.dimCount != 3 || io_dims.dims[0] != 1 || io_dims.dims[2] != 6 || bytes == 0) {
             return Status(COSMO_NN_ERR_ASCEND_QUERY,
-                          "Ascend output must be a fixed-batch tensor model=" + GetModelPath() + " " +
+                          "Ascend output must be [1,N,6] end2end model=" + GetModelPath() + " " +
                               TensorDescription("output", i, io_dims, aclmdlGetOutputDataType(desc_, i),
                                                 aclmdlGetOutputFormat(desc_, i), bytes));
         }
@@ -272,25 +242,24 @@ Status AscendNetNode::AllocateIo() {
     input_dataset_  = aclmdlCreateDataset();
     output_dataset_ = aclmdlCreateDataset();
     if (input_dataset_ == nullptr || output_dataset_ == nullptr)
-        return Status(COSMO_NN_ERR_ASCEND_MEM, "stage=ascend-alloc device=" +
-                                                   std::to_string(device_id_) + " model=" + GetModelPath() +
+        return Status(COSMO_NN_ERR_ASCEND_MEM, "stage=ascend-alloc device=" + std::to_string(device_id_) +
+                                                   " model=" + GetModelPath() +
                                                    " aclmdlCreateDataset failed");
 
     for (size_t i = 0; i < input_sizes_.size(); ++i) {
-        void* dev = nullptr;
+        void* dev          = nullptr;
         const aclError ret = aclrtMalloc(&dev, input_sizes_[i], ACL_MEM_MALLOC_HUGE_FIRST);
         if (ret != ACL_SUCCESS)
-            return MakeAclStatus(COSMO_NN_ERR_ASCEND_MEM, "aclrtMalloc",
-                                 "tensor=input[" + std::to_string(i) + "] size=" +
-                                     std::to_string(input_sizes_[i]),
-                                 ret);
+            return MakeAclStatus(
+                COSMO_NN_ERR_ASCEND_MEM, "aclrtMalloc",
+                "tensor=input[" + std::to_string(i) + "] size=" + std::to_string(input_sizes_[i]), ret);
         input_devices_.push_back(dev);
         aclDataBuffer* buf = aclCreateDataBuffer(dev, input_sizes_[i]);
         if (buf == nullptr)
-            return Status(COSMO_NN_ERR_ASCEND_MEM, "stage=ascend-alloc device=" +
-                                                       std::to_string(device_id_) + " model=" +
-                                                       GetModelPath() + " aclCreateDataBuffer input[" +
-                                                       std::to_string(i) + "] failed");
+            return Status(COSMO_NN_ERR_ASCEND_MEM, "stage=ascend-alloc device=" + std::to_string(device_id_) +
+                                                       " model=" + GetModelPath() +
+                                                       " aclCreateDataBuffer input[" + std::to_string(i) +
+                                                       "] failed");
         input_buffers_.push_back(buf);
         const aclError add_ret = aclmdlAddDatasetBuffer(input_dataset_, buf);
         if (add_ret != ACL_SUCCESS)
@@ -300,20 +269,19 @@ Status AscendNetNode::AllocateIo() {
 
     size_t max_output_bytes = 0;
     for (size_t i = 0; i < output_sizes_.size(); ++i) {
-        void* dev = nullptr;
+        void* dev          = nullptr;
         const aclError ret = aclrtMalloc(&dev, output_sizes_[i], ACL_MEM_MALLOC_HUGE_FIRST);
         if (ret != ACL_SUCCESS)
-            return MakeAclStatus(COSMO_NN_ERR_ASCEND_MEM, "aclrtMalloc",
-                                 "tensor=output[" + std::to_string(i) + "] size=" +
-                                     std::to_string(output_sizes_[i]),
-                                 ret);
+            return MakeAclStatus(
+                COSMO_NN_ERR_ASCEND_MEM, "aclrtMalloc",
+                "tensor=output[" + std::to_string(i) + "] size=" + std::to_string(output_sizes_[i]), ret);
         output_devices_.push_back(dev);
         aclDataBuffer* buf = aclCreateDataBuffer(dev, output_sizes_[i]);
         if (buf == nullptr)
-            return Status(COSMO_NN_ERR_ASCEND_MEM, "stage=ascend-alloc device=" +
-                                                       std::to_string(device_id_) + " model=" +
-                                                       GetModelPath() + " aclCreateDataBuffer output[" +
-                                                       std::to_string(i) + "] failed");
+            return Status(COSMO_NN_ERR_ASCEND_MEM, "stage=ascend-alloc device=" + std::to_string(device_id_) +
+                                                       " model=" + GetModelPath() +
+                                                       " aclCreateDataBuffer output[" + std::to_string(i) +
+                                                       "] failed");
         output_buffers_.push_back(buf);
         const aclError add_ret = aclmdlAddDatasetBuffer(output_dataset_, buf);
         if (add_ret != ACL_SUCCESS)
@@ -325,9 +293,9 @@ Status AscendNetNode::AllocateIo() {
     try {
         output_scratch_.resize(max_output_bytes);
     } catch (const std::bad_alloc&) {
-        return Status(COSMO_NN_ERR_OUT_OF_MEMORY, "stage=ascend-alloc device=" +
-                                                      std::to_string(device_id_) + " model=" +
-                                                      GetModelPath() + " output scratch allocation failed");
+        return Status(COSMO_NN_ERR_OUT_OF_MEMORY, "stage=ascend-alloc device=" + std::to_string(device_id_) +
+                                                      " model=" + GetModelPath() +
+                                                      " output scratch allocation failed");
     }
     return COSMO_NN_OK;
 }
@@ -338,13 +306,12 @@ Status AscendNetNode::BindInputBlobs(std::vector<std::shared_ptr<Blob>>& bottom_
     if (bottom_blobs.size() != 1 || !bottom_blobs[0])
         return Status(COSMO_NN_ERR_ASCEND_BIND, "Ascend input blob is missing model=" + GetModelPath());
 
-    const auto& desc = bottom_blobs[0]->GetBlobDesc();
-    const size_t bytes =
-        DimsVectorUtils::Count(desc.dims) * DataTypeUtils::GetBytesSize(desc.data_type);
+    const auto& desc   = bottom_blobs[0]->GetBlobDesc();
+    const size_t bytes = DimsVectorUtils::Count(desc.dims) * DataTypeUtils::GetBytesSize(desc.data_type);
     if (bytes != input_sizes_[0]) {
-        return Status(COSMO_NN_ERR_ASCEND_BIND,
-                      "Ascend input blob size mismatch model=" + GetModelPath() + " expected=" +
-                          std::to_string(input_sizes_[0]) + " got=" + std::to_string(bytes));
+        return Status(COSMO_NN_ERR_ASCEND_BIND, "Ascend input blob size mismatch model=" + GetModelPath() +
+                                                    " expected=" + std::to_string(input_sizes_[0]) +
+                                                    " got=" + std::to_string(bytes));
     }
     return COSMO_NN_OK;
 }
@@ -366,10 +333,9 @@ Status AscendNetNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_blobs,
     if (bottom_blobs.size() != 1 || !bottom_blobs[0] || !bottom_blobs[0]->GetHandle().base)
         return Status(COSMO_NN_ERR_ASCEND_BIND, "Ascend input blob is missing model=" + GetModelPath());
     if (top_blobs.size() != output_sizes_.size())
-        return Status(COSMO_NN_ERR_ASCEND_RUN, "Ascend output blob count mismatch model=" +
-                                                   GetModelPath() + " expected=" +
-                                                   std::to_string(output_sizes_.size()) + " got=" +
-                                                   std::to_string(top_blobs.size()));
+        return Status(COSMO_NN_ERR_ASCEND_RUN, "Ascend output blob count mismatch model=" + GetModelPath() +
+                                                   " expected=" + std::to_string(output_sizes_.size()) +
+                                                   " got=" + std::to_string(top_blobs.size()));
 
     const size_t input_bytes = input_sizes_[0];
     const auto& input_desc   = bottom_blobs[0]->GetBlobDesc();
@@ -379,6 +345,12 @@ Status AscendNetNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_blobs,
         return Status(COSMO_NN_ERR_ASCEND_BIND, "Ascend input blob is too small model=" + GetModelPath() +
                                                     " expected=" + std::to_string(input_bytes) +
                                                     " got=" + std::to_string(host_input_bytes));
+
+    // ACL context is thread-local; Forward may run on a different thread than
+    // LoadWeight, so re-bind this graph's context before using its stream.
+    const aclError ctx_ret = aclrtSetCurrentContext(context_);
+    if (ctx_ret != ACL_SUCCESS)
+        return MakeAclStatus(COSMO_NN_ERR_ASCEND_CONTEXT, "aclrtSetCurrentContext", "", ctx_ret);
 
     aclError ret = aclrtMemcpyAsync(input_devices_[0], input_bytes, bottom_blobs[0]->GetHandle().base,
                                     input_bytes, ACL_MEMCPY_HOST_TO_DEVICE, stream_);
@@ -401,23 +373,20 @@ Status AscendNetNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_blobs,
                                                        GetModelPath() + " index=" + std::to_string(i));
 
         const size_t out_bytes = output_sizes_[i];
-        ret = aclrtMemcpy(output_scratch_.data(), out_bytes, output_devices_[i], out_bytes,
-                          ACL_MEMCPY_DEVICE_TO_HOST);
+        ret                    = aclrtMemcpy(output_scratch_.data(), out_bytes, output_devices_[i], out_bytes,
+                                             ACL_MEMCPY_DEVICE_TO_HOST);
         if (ret != ACL_SUCCESS)
             return MakeAclStatus(COSMO_NN_ERR_ASCEND_MEMCPY, "output-d2h",
-                                 "tensor=output[" + std::to_string(i) + "] size=" +
-                                     std::to_string(out_bytes),
+                                 "tensor=output[" + std::to_string(i) + "] size=" + std::to_string(out_bytes),
                                  ret);
 
         if (output_types_[i] == ACL_FLOAT16) {
-            const size_t count = out_bytes / sizeof(uint16_t);
-            const size_t dst_bytes =
-                DimsVectorUtils::Count(top_blob->GetBlobDesc().dims) *
-                DataTypeUtils::GetBytesSize(top_blob->GetBlobDesc().data_type);
+            const size_t count     = out_bytes / sizeof(uint16_t);
+            const size_t dst_bytes = DimsVectorUtils::Count(top_blob->GetBlobDesc().dims) *
+                                     DataTypeUtils::GetBytesSize(top_blob->GetBlobDesc().data_type);
             if (dst_bytes < count * sizeof(float))
                 return Status(COSMO_NN_ERR_ASCEND_RUN, "Ascend output blob is too small model=" +
-                                                           GetModelPath() + " index=" +
-                                                           std::to_string(i));
+                                                           GetModelPath() + " index=" + std::to_string(i));
             const uint16_t* src = reinterpret_cast<const uint16_t*>(output_scratch_.data());
             float* dst          = static_cast<float*>(top_blob->GetHandle().base);
             for (size_t k = 0; k < count; ++k)
@@ -442,9 +411,8 @@ Status AscendNetNode::MakeAclStatus(int code, const std::string& stage, const st
     return Status(code, message);
 }
 
-std::string AscendNetNode::TensorDescription(const std::string& kind, size_t index,
-                                             const aclmdlIODims& dims, aclDataType dtype,
-                                             aclFormat format, size_t bytes) const {
+std::string AscendNetNode::TensorDescription(const std::string& kind, size_t index, const aclmdlIODims& dims,
+                                             aclDataType dtype, aclFormat format, size_t bytes) const {
     std::string text = "tensor=" + kind + "[" + std::to_string(index) + "]";
     if (dims.name != nullptr && dims.name[0] != '\0')
         text += " name=" + std::string(dims.name);
@@ -511,10 +479,9 @@ void AscendNetNode::Destroy() {
         context_ = nullptr;
     }
     if (device_set_) {
-        (void)aclrtResetDevice(device_id_);
+        (void)ascend::ReleaseDevice(device_id_);
         device_set_ = false;
     }
-    input_shapes_.clear();
     input_sizes_.clear();
     output_shapes_.clear();
     output_sizes_.clear();

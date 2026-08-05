@@ -75,6 +75,10 @@ namespace {
 
 bool require_detections_ = false;
 
+// InputNodeInfo raw data_type encoding, see DataTypeFromInputInfo
+// (nn/utils/data_type_utils.h): 0=fp32, 1=fp16, 2=bfp16, 3=int8.
+constexpr int kInputInfoFp16 = 1;
+
 void Require(bool condition, const std::string& message) {
     if (!condition)
         throw std::runtime_error(message);
@@ -94,8 +98,7 @@ std::string ReadFile(const std::string& path, size_t expected_size) {
     Require(length > 0, path + " is empty");
     if (expected_size != 0)
         Require(static_cast<size_t>(length) == expected_size,
-                path + " size " + std::to_string(length) + " != expected " +
-                    std::to_string(expected_size));
+                path + " size " + std::to_string(length) + " != expected " + std::to_string(expected_size));
     std::string data(static_cast<size_t>(length), '\0');
     stream.read(&data[0], length);
     Require(bool(stream), "failed to read " + path);
@@ -105,7 +108,7 @@ std::string ReadFile(const std::string& path, size_t expected_size) {
 uint16_t FloatToFp16(float value) {
     uint32_t bits = 0;
     std::memcpy(&bits, &value, sizeof(bits));
-    const uint32_t sign = (bits >> 16U) & 0x8000U;
+    const uint32_t sign     = (bits >> 16U) & 0x8000U;
     const uint32_t exponent = (bits >> 23U) & 0xffU;
     const uint32_t mantissa = bits & 0x7fffffU;
     if (exponent == 0xffU)
@@ -170,14 +173,13 @@ OmContract ProbeOm(const std::string& om_path) {
     return contract;
 }
 
-std::shared_ptr<cosmo::nn::Blob> MakeInputBlob(const OmContract& contract,
-                                               const std::string& input_path, float fill_value) {
+std::shared_ptr<cosmo::nn::Blob> MakeInputBlob(const OmContract& contract, const std::string& input_path,
+                                               float fill_value) {
     using namespace cosmo::nn;
     Require(contract.input_dims.size() == 4, "probe input must be 4D");
-    const size_t elements = static_cast<size_t>(contract.input_dims[0]) *
-                            static_cast<size_t>(contract.input_dims[1]) *
-                            static_cast<size_t>(contract.input_dims[2]) *
-                            static_cast<size_t>(contract.input_dims[3]);
+    const size_t elements =
+        static_cast<size_t>(contract.input_dims[0]) * static_cast<size_t>(contract.input_dims[1]) *
+        static_cast<size_t>(contract.input_dims[2]) * static_cast<size_t>(contract.input_dims[3]);
     Require(elements * sizeof(uint16_t) == contract.input_bytes,
             "probe input bytes do not match FP16 element count");
 
@@ -203,8 +205,8 @@ std::shared_ptr<cosmo::nn::Blob> MakeInputBlob(const OmContract& contract,
 
 void PrintDetections(const std::shared_ptr<cosmo::nn::Blob>& blob, float conf_threshold) {
     using namespace cosmo::nn;
-    const auto desc  = blob->GetBlobDesc();
-    const auto dims  = desc.dims;
+    const auto desc = blob->GetBlobDesc();
+    const auto dims = desc.dims;
     Require(dims.size() == 3 && dims[2] == 6, "unexpected output shape");
     const float* data = static_cast<const float*>(blob->GetHandle().base);
     int valid         = 0;
@@ -322,19 +324,19 @@ int main(int argc, char** argv) {
     info.algorithmcode = "yolo26_det_smoke";
     info.type          = "yolo26_det";
     ModelInfo model;
-    model.name     = "yolo26_det";
-    model.filename = "model.om";
+    model.name      = "yolo26_det";
+    model.filename  = "model.om";
     model.max_batch = 1;
     InputNodeInfo input;
     input.name      = "images";
     input.shape     = contract.input_dims;
-    input.data_type = 1;  // FP16
+    input.data_type = kInputInfoFp16;
     model.input_node_infos.push_back(std::move(input));
     OutputNodeInfo output;
-    output.name      = "output0";
-    output.shape     = {1, top_k, 6};
-    output.data_type = 1;  // FP16
-    auto post        = std::make_unique<YoloPost>("yolo_e2e_postprocess");
+    output.name              = "output0";
+    output.shape             = {1, top_k, 6};
+    output.data_type         = kInputInfoFp16;
+    auto post                = std::make_unique<YoloPost>("yolo_e2e_postprocess");
     post->nms_detection_conf = conf_threshold;
     post->top_k              = top_k;
     post->input_width        = width;
@@ -345,8 +347,7 @@ int main(int argc, char** argv) {
 
     std::printf("graph_init device=DEVICE_ASCEND...\n");
     Graph graph;
-    RequireStatus(graph.Init(info, om_path, DEVICE_ASCEND, "", /*device_id=*/0),
-                  "Graph::Init failed");
+    RequireStatus(graph.Init(info, om_path, DEVICE_ASCEND, "", /*device_id=*/0), "Graph::Init failed");
 
     auto input_blob = MakeInputBlob(contract, input_path, fill_value);
 
@@ -358,16 +359,15 @@ int main(int argc, char** argv) {
 
         auto outputs = graph.Output();
         Require(outputs.size() == 1, "expected one graph output blob");
-        auto& top       = outputs[0];
-        const auto desc = top->GetBlobDesc();
-        const auto dims = desc.dims;
+        auto& top           = outputs[0];
+        const auto desc     = top->GetBlobDesc();
+        const auto dims     = desc.dims;
         const size_t floats = DimsVectorUtils::Count(dims);
         const float* data   = static_cast<const float*>(top->GetHandle().base);
 
         if (it == 0) {
             reference.assign(data, data + floats);
-            std::printf("iteration=%d output_dims=[%d,%d,%d] dtype=FP32\n", it, dims[0], dims[1],
-                        dims[2]);
+            std::printf("iteration=%d output_dims=[%d,%d,%d] dtype=FP32\n", it, dims[0], dims[1], dims[2]);
             PrintDetections(top, conf_threshold);
         } else {
             Require(std::memcmp(reference.data(), data, floats * sizeof(float)) == 0,

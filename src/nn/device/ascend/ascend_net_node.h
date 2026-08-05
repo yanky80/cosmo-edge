@@ -45,12 +45,12 @@ private:
     std::string TensorDescription(const std::string& kind, size_t index, const aclmdlIODims& dims,
                                   aclDataType dtype, aclFormat format, size_t bytes) const;
 
-    int device_id_      = 0;
-    bool device_set_    = false;
-    aclrtContext context_ = nullptr;
-    aclrtStream stream_   = nullptr;
-    uint32_t model_id_    = 0;
-    aclmdlDesc* desc_     = nullptr;
+    int device_id_                 = 0;
+    bool device_set_               = false;
+    aclrtContext context_          = nullptr;
+    aclrtStream stream_            = nullptr;
+    uint32_t model_id_             = 0;
+    aclmdlDesc* desc_              = nullptr;
     aclmdlDataset* input_dataset_  = nullptr;
     aclmdlDataset* output_dataset_ = nullptr;
 
@@ -62,7 +62,6 @@ private:
     std::vector<size_t> output_sizes_;
     std::vector<aclDataType> input_types_;
     std::vector<aclDataType> output_types_;
-    std::vector<DimsVector> input_shapes_;
     std::vector<DimsVector> output_shapes_;
     std::vector<uint8_t> output_scratch_;
 };

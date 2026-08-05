@@ -422,6 +422,10 @@ smoke OK: 3 iteration(s), deterministic parsed detections on device 0
 三个迭代输出逐字节一致，确认预分配 buffer 复用；同一输入喂 0~255 时 0 检测，
 确认 OM 输入契约为 0~1 归一化。
 
+> 说明：验收标准中 "returns six host FP16 blobs" 按本方案的 B 型契约解释为
+> 单张 end2end 输出（每行六个值 `x1,y1,x2,y2,score,class_id`）；设备侧为 FP16，
+> host 侧以 FP32 blob 提供（`yolo_e2e` 后处理节点按 FP32 读取）。
+
 排查记录：320x240 基线帧（`/tmp/cosmo_baseline_h264.mp4`）的目标过小，在
 960x960 letterbox 下 0 检测（Ultralytics 的 `auto=True` letterbox 实际送
 736x960 才有检测，OM 固定 960x960 不接受），故改用 720p `sample_ascend.264`
