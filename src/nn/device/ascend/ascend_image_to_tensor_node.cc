@@ -87,8 +87,13 @@ size_t AscendImageToTensorNode::GetTopCount() {
 
 Status AscendImageToTensorNode::ValidateSurface(const media::FrameSurface& surface, int frame_width,
                                                 int frame_height) const {
-    if (surface.memory_type != media::FrameSurfaceMemoryType::Host)
-        return Status(COSMO_NN_ERR_ASCEND_DVPP_FORMAT, "ascend image_to_tensor input is not a host surface");
+    if (surface.memory_type != media::FrameSurfaceMemoryType::Device &&
+        surface.memory_type != media::FrameSurfaceMemoryType::Host)
+        return Status(COSMO_NN_ERR_ASCEND_DVPP_FORMAT,
+                      "ascend image_to_tensor input is not a device or host surface");
+    if (surface.memory_type == media::FrameSurfaceMemoryType::Device && surface.lifetime == nullptr)
+        return Status(COSMO_NN_ERR_ASCEND_DVPP_FORMAT,
+                      "ascend image_to_tensor device surface has no bound lifetime (expired frame)");
     if (!surface.IsValid())
         return Status(COSMO_NN_ERR_ASCEND_DVPP_FORMAT,
                       "ascend image_to_tensor surface is invalid " + SurfaceToString(surface));
@@ -221,7 +226,10 @@ Status AscendImageToTensorNode::EnsureDvpp(const media::FrameSurface& surface, i
         vpc_chn_ = static_cast<int>(chn);
     }
 
-    if (src_dev_size_ < src_bytes) {
+    // Device input feeds the decoder's own DVPP buffer straight into the VPC
+    // task, so no upload scratch is needed; the host NV12 stage-one path
+    // still allocates and uploads here.
+    if (surface.memory_type != media::FrameSurfaceMemoryType::Device && src_dev_size_ < src_bytes) {
         if (src_dev_ != nullptr) {
             (void)hi_mpi_dvpp_free(src_dev_);
             src_dev_ = nullptr;
@@ -279,18 +287,35 @@ Status AscendImageToTensorNode::Forward(std::vector<std::shared_ptr<Blob>>& bott
     const size_t pitch      = luma.pitch;
     const size_t luma_row   = static_cast<size_t>(frame_height);
     const size_t chroma_row = static_cast<size_t>(frame_height) / 2;
+    const bool device_input = surface->memory_type == media::FrameSurfaceMemoryType::Device;
 
-    // Upload NV12 (luma + interleaved chroma) into one contiguous DVPP buffer.
-    aclError ret =
-        aclrtMemcpy(src_dev_, pitch * luma_row, luma.virt_addr, pitch * luma_row, ACL_MEMCPY_HOST_TO_DEVICE);
-    if (ret != ACL_SUCCESS)
-        return MakeDvppStatus(COSMO_NN_ERR_ASCEND_MEMCPY, "upload-y",
-                              "pitch=" + std::to_string(pitch) + " rows=" + std::to_string(luma_row), ret);
-    ret = aclrtMemcpy(static_cast<uint8_t*>(src_dev_) + pitch * luma_row, pitch * chroma_row,
-                      chroma.virt_addr, pitch * chroma_row, ACL_MEMCPY_HOST_TO_DEVICE);
-    if (ret != ACL_SUCCESS)
-        return MakeDvppStatus(COSMO_NN_ERR_ASCEND_MEMCPY, "upload-uv",
-                              "pitch=" + std::to_string(pitch) + " rows=" + std::to_string(chroma_row), ret);
+    // Device input: the custom Ascend FFmpeg AVFrame buffer is already DVPP
+    // memory (hi_mpi_dvpp_malloc pool), so the VPC task reads it directly and
+    // no intermediate host image or H2D upload exists on this path.
+    void* src_addr = nullptr;
+    aclError ret   = ACL_SUCCESS;
+    if (device_input) {
+        src_addr = surface->GetPlaneData(0);
+        if (src_addr == nullptr)
+            return Status(COSMO_NN_ERR_ASCEND_DVPP_FORMAT,
+                          "ascend image_to_tensor device surface has no Y plane address");
+    } else {
+        // Stage-one fallback: upload host NV12 (luma + interleaved chroma)
+        // into one contiguous DVPP buffer.
+        src_addr = src_dev_;
+        ret      = aclrtMemcpy(src_dev_, pitch * luma_row, luma.virt_addr, pitch * luma_row,
+                               ACL_MEMCPY_HOST_TO_DEVICE);
+        if (ret != ACL_SUCCESS)
+            return MakeDvppStatus(COSMO_NN_ERR_ASCEND_MEMCPY, "upload-y",
+                                  "pitch=" + std::to_string(pitch) + " rows=" + std::to_string(luma_row),
+                                  ret);
+        ret = aclrtMemcpy(static_cast<uint8_t*>(src_dev_) + pitch * luma_row, pitch * chroma_row,
+                          chroma.virt_addr, pitch * chroma_row, ACL_MEMCPY_HOST_TO_DEVICE);
+        if (ret != ACL_SUCCESS)
+            return MakeDvppStatus(COSMO_NN_ERR_ASCEND_MEMCPY, "upload-uv",
+                                  "pitch=" + std::to_string(pitch) + " rows=" + std::to_string(chroma_row),
+                                  ret);
+    }
     const auto upload_done = clock::now();
 
     // DVPP: centered letterbox + NV12->RGB888 in a single crop+resize+make-border
@@ -307,13 +332,17 @@ Status AscendImageToTensorNode::Forward(std::vector<std::shared_ptr<Blob>>& bott
                           " target=" + std::to_string(input_width_) + "x" + std::to_string(input_height_));
 
     hi_vpc_pic_info src_pic{};
-    src_pic.picture_address       = src_dev_;
-    src_pic.picture_buffer_size   = static_cast<hi_u32>(src_dev_size_);
-    src_pic.picture_width         = static_cast<hi_u32>(frame_width);
-    src_pic.picture_height        = static_cast<hi_u32>(frame_height);
-    src_pic.picture_width_stride  = static_cast<hi_u32>(pitch);
-    src_pic.picture_height_stride = static_cast<hi_u32>(frame_height);
-    src_pic.picture_format        = HI_PIXEL_FORMAT_YUV_SEMIPLANAR_420;
+    src_pic.picture_address      = src_addr;
+    src_pic.picture_buffer_size  = static_cast<hi_u32>(device_input ? luma.size : src_dev_size_);
+    src_pic.picture_width        = static_cast<hi_u32>(frame_width);
+    src_pic.picture_height       = static_cast<hi_u32>(frame_height);
+    src_pic.picture_width_stride = static_cast<hi_u32>(pitch);
+    // Device frames may carry a padded VDEC height stride; the vertical stride
+    // derived from the UV plane offset is what matches the actual buffer
+    // layout, so DVPP reads the right UV base.
+    src_pic.picture_height_stride =
+        static_cast<hi_u32>(device_input ? luma.vertical_stride : static_cast<size_t>(frame_height));
+    src_pic.picture_format = HI_PIXEL_FORMAT_YUV_SEMIPLANAR_420;
 
     hi_vpc_pic_info rgb_pic{};
     rgb_pic.picture_address       = rgb_dev_;
@@ -376,11 +405,11 @@ Status AscendImageToTensorNode::Forward(std::vector<std::shared_ptr<Blob>>& bott
         return std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
     };
     LOG_INFO(
-        "ascend image_to_tensor frame={}x{} target={}x{} upload={}us dvpp={}us download={}us "
+        "ascend image_to_tensor input={} frame={}x{} target={}x{} upload={}us dvpp={}us download={}us "
         "normalize={}us total={}us",
-        frame_width, frame_height, input_width_, input_height_, us(frame_start, upload_done),
-        us(upload_done, dvpp_done), us(dvpp_done, download_done), us(download_done, normalize_done),
-        us(frame_start, normalize_done));
+        device_input ? "device" : "host", frame_width, frame_height, input_width_, input_height_,
+        us(frame_start, upload_done), us(upload_done, dvpp_done), us(dvpp_done, download_done),
+        us(download_done, normalize_done), us(frame_start, normalize_done));
 
     timer.Stop();
     return COSMO_NN_OK;

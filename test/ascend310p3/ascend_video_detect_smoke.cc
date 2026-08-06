@@ -5,9 +5,11 @@
 //
 // The smoke drives the repository pieces where the full engine build is not
 // available on the 310P3 host yet:
-//   - media::VideoDecoderAscend (h264_ascend/h265_ascend, host NV12 surfaces)
-//   - nn::AscendImageToTensorNode (DVPP upload, letterbox, NV12->RGB888,
-//     host /255 + FP16 NCHW normalization; logs upload/dvpp/download stages)
+//   - media::VideoDecoderAscend (h264_ascend/h265_ascend, device
+//     AV_PIX_FMT_ASCEND surfaces; issue #32 direct-DVPP path)
+//   - nn::AscendImageToTensorNode (DVPP direct device input or host upload,
+//     letterbox, NV12->RGB888, host /255 + FP16 NCHW normalization; logs
+//     input mode and upload/dvpp/download stages)
 //   - nn::AscendNetNode (aclInit once, per-graph context/stream/model/
 //     datasets/buffers, H2D -> aclmdlExecuteAsync -> sync -> D2H + FP16->FP32)
 //   - nn::YoloE2EDecodeNode (host postprocess, letterbox coordinate recovery)
@@ -327,8 +329,12 @@ public:
 std::shared_ptr<cosmo::nn::Blob> MakeSurfaceBlob(const cosmo::media::VideoFramePtr& frame) {
     const auto surface = frame->GetSurface();
     Require(surface != nullptr && surface->IsValid(), "decoded frame surface is invalid");
-    Require(surface->memory_type == cosmo::media::FrameSurfaceMemoryType::Host,
-            "decoded surface is not host memory");
+    // Issue #32: the Ascend decoder hands out device (AV_PIX_FMT_ASCEND)
+    // surfaces by default; the host NV12 stage-one surface is still accepted
+    // for sources without device export.
+    Require(surface->memory_type == cosmo::media::FrameSurfaceMemoryType::Device ||
+                surface->memory_type == cosmo::media::FrameSurfaceMemoryType::Host,
+            "decoded surface is neither device nor host memory");
     Require(surface->planes.size() == 2, "NV12 surface must expose two planes");
 
     cosmo::nn::BlobDesc desc;
