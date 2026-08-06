@@ -35,21 +35,21 @@ cosmo::nn::ImageFormat GetImageFormatType() {
 #ifdef COSMO_NN_USE_RKNN_BACKEND
 namespace {
 
-std::shared_ptr<cosmo::nn::Blob> MakeRknnSurfaceBlob(const VideoFramePtr& image) {
-    auto surface = image->GetSurface();
-    if (!surface || surface->memory_type != media::FrameSurfaceMemoryType::DmaBuf)
-        return nullptr;
+    std::shared_ptr<cosmo::nn::Blob> MakeRknnSurfaceBlob(const VideoFramePtr& image) {
+        auto surface = image->GetSurface();
+        if (!surface || surface->memory_type != media::FrameSurfaceMemoryType::DmaBuf)
+            return nullptr;
 
-    cosmo::nn::BlobDesc desc;
-    desc.data_format = GetDataFormatType();
-    desc.data_type   = cosmo::nn::DataType::DATA_TYPE_UINT8;
-    desc.dims        = {1, static_cast<int>(image->GetHeight()), static_cast<int>(image->GetWidth()), 3};
-    desc.device_type = GetDeviceType();
-    cosmo::nn::BlobHandle handle;
-    handle.base      = surface.get();
-    handle.ownership = cosmo::nn::BLOB_HANDLE_EXTERNAL_OWNED;
-    return std::make_shared<cosmo::nn::Blob>(desc, handle);
-}
+        cosmo::nn::BlobDesc desc;
+        desc.data_format = GetDataFormatType();
+        desc.data_type   = cosmo::nn::DataType::DATA_TYPE_UINT8;
+        desc.dims        = {1, static_cast<int>(image->GetHeight()), static_cast<int>(image->GetWidth()), 3};
+        desc.device_type = GetDeviceType();
+        cosmo::nn::BlobHandle handle;
+        handle.base      = surface.get();
+        handle.ownership = cosmo::nn::BLOB_HANDLE_EXTERNAL_OWNED;
+        return std::make_shared<cosmo::nn::Blob>(desc, handle);
+    }
 
 }  // namespace
 #endif
@@ -57,24 +57,27 @@ std::shared_ptr<cosmo::nn::Blob> MakeRknnSurfaceBlob(const VideoFramePtr& image)
 #ifdef COSMO_NN_USE_ASCEND_BACKEND
 namespace {
 
-std::shared_ptr<cosmo::nn::Blob> MakeAscendSurfaceBlob(const VideoFramePtr& image) {
-    auto surface = image->GetSurface();
-    // The Ascend FFmpeg decoder (h264_ascend/h265_ascend) delivers host NV12
-    // surfaces; AscendImageToTensorNode uploads them to DVPP itself.
-    if (!surface || surface->memory_type != media::FrameSurfaceMemoryType::Host ||
-        surface->planes.size() != 2)
-        return nullptr;
+    std::shared_ptr<cosmo::nn::Blob> MakeAscendSurfaceBlob(const VideoFramePtr& image) {
+        auto surface = image->GetSurface();
+        // The Ascend FFmpeg decoder (h264_ascend/h265_ascend) delivers device
+        // AV_PIX_FMT_ASCEND surfaces (preferred, direct DVPP input) or host NV12
+        // fallback; AscendImageToTensorNode consumes either.
+        if (!surface ||
+            (surface->memory_type != media::FrameSurfaceMemoryType::Host &&
+             surface->memory_type != media::FrameSurfaceMemoryType::Device) ||
+            surface->planes.size() != 2)
+            return nullptr;
 
-    cosmo::nn::BlobDesc desc;
-    desc.data_format = GetDataFormatType();
-    desc.data_type   = cosmo::nn::DataType::DATA_TYPE_UINT8;
-    desc.dims        = {1, static_cast<int>(image->GetHeight()), static_cast<int>(image->GetWidth()), 3};
-    desc.device_type = GetDeviceType();
-    cosmo::nn::BlobHandle handle;
-    handle.base      = surface.get();
-    handle.ownership = cosmo::nn::BLOB_HANDLE_EXTERNAL_OWNED;
-    return std::make_shared<cosmo::nn::Blob>(desc, handle);
-}
+        cosmo::nn::BlobDesc desc;
+        desc.data_format = GetDataFormatType();
+        desc.data_type   = cosmo::nn::DataType::DATA_TYPE_UINT8;
+        desc.dims        = {1, static_cast<int>(image->GetHeight()), static_cast<int>(image->GetWidth()), 3};
+        desc.device_type = GetDeviceType();
+        cosmo::nn::BlobHandle handle;
+        handle.base      = surface.get();
+        handle.ownership = cosmo::nn::BLOB_HANDLE_EXTERNAL_OWNED;
+        return std::make_shared<cosmo::nn::Blob>(desc, handle);
+    }
 
 }  // namespace
 #endif

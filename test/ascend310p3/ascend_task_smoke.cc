@@ -42,7 +42,8 @@
 //       src/nn/utils/blob_memory_size_utils.cc src/nn/utils/data_type_utils.cc \
 //       src/nn/device/naive/naive_device.cc src/nn/device/naive/naive_context.cc \
 //       src/media/VideoDecoder.cc src/media/VideoDecoderCreateAscend.cc \
-//       src/media/VideoDecoderAscend.cc src/media/VideoFrame.cc \
+//       src/media/VideoDecoderAscend.cc src/media/VideoDecoderAscendHostCopy.cc \
+//       src/media/VideoFrame.cc \
 //       src/media/PixelFormatUtils.cc src/media/VideoFrameProcCpu.cc \
 //       src/mem/MemoryPoolMng.cc src/mem/FixedBlockPool.cc \
 //       src/mem/AllocatorCpu.cc src/mem/BlockFreqCalc.cc \
@@ -101,6 +102,7 @@ extern "C" {
 #include "media/IOsdTextRenderer.h"
 #include "media/PixelFormat.h"
 #include "media/VideoDecoder.h"
+#include "media/VideoDecoderAscend.h"
 #include "media/VideoFrame.h"
 #include "media/VideoFrameProcCpu.h"
 #include "mem/AllocatorCpu.h"
@@ -357,8 +359,11 @@ public:
 std::shared_ptr<cosmo::nn::Blob> MakeSurfaceBlob(const cosmo::media::VideoFramePtr& frame) {
     const auto surface = frame->GetSurface();
     Require(surface != nullptr && surface->IsValid(), "decoded frame surface is invalid");
-    Require(surface->memory_type == cosmo::media::FrameSurfaceMemoryType::Host,
-            "decoded surface is not host memory");
+    // The Ascend decoder prefers device AV_PIX_FMT_ASCEND frames (direct DVPP
+    // input) with host NV12 fallback; AscendImageToTensorNode consumes both.
+    Require(surface->memory_type == cosmo::media::FrameSurfaceMemoryType::Host ||
+                surface->memory_type == cosmo::media::FrameSurfaceMemoryType::Device,
+            "decoded surface is neither host NV12 nor Ascend device memory");
     Require(surface->planes.size() == 2, "NV12 surface must expose two planes");
 
     cosmo::nn::BlobDesc desc;
@@ -543,17 +548,48 @@ cosmo::media::VideoFramePtr ManualNv12ToI420(const cosmo::media::VideoFramePtr& 
 
 void CheckHostConversion(const cosmo::media::VideoFramePtr& frame) {
     Require(frame != nullptr && frame->Active(), "host check needs a decoded frame");
+    const int width    = static_cast<int>(frame->GetWidth());
+    const int height   = static_cast<int>(frame->GetHeight());
     const auto surface = frame->GetSurface();
-    Require(surface != nullptr && surface->memory_type == cosmo::media::FrameSurfaceMemoryType::Host,
-            "host check needs a host NV12 surface");
+    Require(surface != nullptr && surface->IsValid(), "host check needs a valid NV12 surface");
+    Require(surface->memory_type == cosmo::media::FrameSurfaceMemoryType::Host ||
+                surface->memory_type == cosmo::media::FrameSurfaceMemoryType::Device,
+            "host check needs a host NV12 or Ascend device surface");
+
+    // Preview/snapshot/OSD consumers read host memory. Device frames (the
+    // merged decoder's preferred output, issue #32) are downloaded on demand.
+    cosmo::media::VideoFramePtr host_frame = frame;
+    if (surface->memory_type == cosmo::media::FrameSurfaceMemoryType::Device) {
+        std::vector<uint8_t> host_nv12;
+        std::string error;
+        Require(cosmo::media::DownloadAscendDeviceSurfaceToHost(*surface, width, height, host_nv12, error),
+                "device -> host NV12 download failed: " + error);
+        // Wrap the downloaded pitch-aligned buffer in a Host FrameSurface
+        // (same plane layout as BuildAscendNv12Surface) and reuse the common
+        // host-copy checks below.
+        const size_t pitch        = surface->planes[0].pitch;
+        const size_t luma_bytes   = pitch * static_cast<size_t>(height);
+        auto host_storage         = std::make_shared<std::vector<uint8_t>>(std::move(host_nv12));
+        auto host_surface         = std::make_shared<cosmo::media::FrameSurface>();
+        host_surface->memory_type = cosmo::media::FrameSurfaceMemoryType::Host;
+        host_surface->lifetime    = host_storage;
+        host_surface->planes.push_back(cosmo::media::FramePlane{
+            -1, host_storage->data(), 0, pitch, static_cast<size_t>(height), host_storage->size()});
+        host_surface->planes.push_back(cosmo::media::FramePlane{-1, host_storage->data() + luma_bytes, 0,
+                                                                pitch, static_cast<size_t>(height) / 2,
+                                                                host_storage->size()});
+        host_frame = std::make_shared<cosmo::media::VideoFrame>(
+            width, height, cosmo::media::PixelFormat::PIXEL_NV12, host_surface);
+        Require(host_frame->Active(), "wrapping the downloaded host NV12 failed");
+    }
 
     StubOsdTextRenderer osd;
     cosmo::media::VideoFrameProcCpu proc(osd);
 
-    // Task-side host-copy consumers must see host data without a device download.
-    auto copy = proc.CopyFrame(frame);
+    // Task-side host-copy consumers must see host data.
+    auto copy = proc.CopyFrame(host_frame);
     Require(copy != nullptr && copy->Active() && copy->GetData() != nullptr, "CopyFrame failed");
-    Require(proc.EnsureHostData(frame), "EnsureHostData failed on a host NV12 surface");
+    Require(proc.EnsureHostData(host_frame), "EnsureHostData failed on a host NV12 surface");
 
     // The regular consumer path is sws_scale NV12->I420, which SIGSEGVs in
     // the Ascend libswscale 5 on this host (known pre-existing env issue,
@@ -562,7 +598,7 @@ void CheckHostConversion(const cosmo::media::VideoFramePtr& frame) {
     const pid_t pid = fork();
     Require(pid >= 0, "fork failed");
     if (pid == 0) {
-        auto sws_i420 = proc.NV12ToI420(frame);
+        auto sws_i420 = proc.NV12ToI420(host_frame);
         _exit(sws_i420 != nullptr && sws_i420->Active() ? 0 : 2);
     }
     int status = 0;
@@ -574,10 +610,10 @@ void CheckHostConversion(const cosmo::media::VideoFramePtr& frame) {
                      "(known Ascend libswscale issue, verified via manual planes)\n";
     }
 
-    auto i420 = ManualNv12ToI420(frame);
+    auto i420 = ManualNv12ToI420(host_frame);
     Require(i420 != nullptr && i420->Active() && i420->GetData() != nullptr,
             "manual NV12->I420 failed on a host NV12 surface");
-    Require(i420->GetWidth() == frame->GetWidth() && i420->GetHeight() == frame->GetHeight(),
+    Require(i420->GetWidth() == host_frame->GetWidth() && i420->GetHeight() == host_frame->GetHeight(),
             "host conversion changed the frame dimensions");
 
     auto jpeg = proc.EncodeJpeg(i420);

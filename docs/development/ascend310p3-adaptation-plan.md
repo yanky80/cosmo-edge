@@ -675,7 +675,12 @@ Ascend 后端返回 true——流切换时只重置逐流簿记（`frame_info_`�
 `ConvertPixelFormat`/`CopyFrame` 在无连续基址时改用
 `planes[i].virt_addr + offset` 与 `linesize(pitch)` 喂 sws / 逐行拷贝，覆盖
 `StreamViewerEncoder` 预览、`TaskAlarmPicture` 抓拍、`EncodeJpeg` 等任务侧
-host-copy 消费方。
+host-copy 消费方。合并 Issue #32（device 帧优先）后，解码器默认输出
+`AV_PIX_FMT_ASCEND` device surface：推理 blob 包装（`AiComponment` 与
+`ascend_task_smoke` 的 `MakeSurfaceBlob`）同时接受 Host/Device 表面；
+preview 的 host-copy 对 device surface 走
+`DownloadAscendDeviceSurfaceToHost`（`VideoDecoderAscendHostCopy.cc`）按需
+D2H 下载后复用同一套 host NV12 检查（sws NV12→I420 与 JPEG 抓拍）。
 
 实例池（`src/service/ai/impl/InferPoolServiceImpl.cc`）：Ascend 后端
 `DetectorPool(alg_code, 1, 3)`——每个任务一个 ACL 实例，最多三个，不加第二
