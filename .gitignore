@@ -4,7 +4,9 @@
 .agent
 .antigravitycli
 .claude
-/.codex/
+/.codex/*
+!/.codex/
+!/.codex/config.toml
 /.agents/skills/
 
 # Local Codex-generated artifacts
