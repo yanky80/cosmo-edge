@@ -13,12 +13,17 @@ namespace cosmo::nn {
 // YOLO letterbox padding gray (114, 114, 114); the model config may override.
 inline constexpr int kDefaultPaddingColor = 114;
 
-// Ascend DVPP image_to_tensor node. Consumes a host NV12 FrameSurface and
+// Ascend DVPP image_to_tensor node. Consumes an NV12 FrameSurface and
 // produces the fixed OM input contract: NCHW FP16 [1,3,H,W] normalized to
 // 0..1 RGB, centered-letterboxed with the configured padding color. DVPP runs
-// the NV12 upload, crop/resize/make-border letterbox, and NV12->RGB888 color
-// conversion; only the /255 + FP16 host conversion happens on the CPU. Every
-// host/device transfer and DVPP stage is timed and logged separately.
+// crop/resize/make-border letterbox and NV12->RGB888 color conversion; only
+// the /255 + FP16 host conversion happens on the CPU. Input surfaces:
+//   - Device (AV_PIX_FMT_ASCEND frames from the custom FFmpeg decoder): DVPP
+//     consumes the decoder's DVPP buffer directly, no H2D upload and no
+//     intermediate host image (issue #32).
+//   - Host NV12 (stage-one fallback for sources without device export): the
+//     surface is uploaded to a DVPP buffer first.
+// Every host/device transfer and DVPP stage is timed and logged separately.
 class AscendImageToTensorNode : public Node {
 public:
     AscendImageToTensorNode();

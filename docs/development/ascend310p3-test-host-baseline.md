@@ -159,7 +159,8 @@ cc -o /tmp/avprobe /tmp/avprobe.c \
 ```
 
 该契约满足 `docs/development/ascend310p3-adaptation-plan.md` 阶段一
-“host NV12 + 一次 H2D”路径；阶段二设备帧直通需等设备帧探针确认。
+“host NV12 + 一次 H2D”路径；阶段二设备帧（`AV_PIX_FMT_ASCEND`，`data[0/1]` 为
+DVPP 设备地址）直通已由 Issue #32 确认并记录于该计划文档。
 
 ## aarch64 部署基线（占位）
 
