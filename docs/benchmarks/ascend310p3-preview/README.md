@@ -40,6 +40,12 @@ h2d/execute+sync/d2h breakdowns). `decode` is reported as the
 peak RSS come from `/usr/bin/time -v`; NPU utilization and device memory come
 from `npu-smi info` sampled during the run.
 
+The checked-in `report.json` also records the means parsed from those logs:
+DVPP image upload/download/normalization, DVPP processing, and ACL input H2D,
+execute+sync, and output D2H+conversion for both detector counts. The
+device-frame path retains the small ACL H2D and D2H values needed by the
+model buffers; these are not host-video-frame copies.
+
 ## Soak: 30+ minutes, 1 and 3 detectors
 
 Run the task smoke with enough `--frames × --rounds` for at least 30 minutes
@@ -64,11 +70,11 @@ file header), then:
 ```sh
 # 100-frame validation
 ./ascend_task_smoke --om /opt/convert/bjsubway-yolo26/model.om \
-  --video /tmp/subway_test_h264_x2.mp4 --frames 100 --conf 0.25 \
+  --video /tmp/subway_test_h264_x2.mp4 --frames 150 --conf 0.25 \
   --dump-detections /tmp/ascend_dets.jsonl
 python3 test/ascend310p3/onnx_fp32_compare.py --mode baseline \
   --onnx /opt/convert/bjsubway-yolo26/best.onnx \
-  --video /tmp/subway_test_h264_x2.mp4 --frames 100 --conf 0.25 \
+  --video /tmp/subway_test_h264_x2.mp4 --frames 150 --conf 0.25 \
   --out /tmp/baseline.jsonl
 python3 test/ascend310p3/onnx_fp32_compare.py --mode compare \
   --baseline /tmp/baseline.jsonl --ascend /tmp/ascend_dets.jsonl \

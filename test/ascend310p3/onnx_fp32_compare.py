@@ -110,9 +110,15 @@ def run_baseline(args):
     print(f"baseline done: {frames_dumped} frames -> {args.out} (model {args.onnx})")
 
 
-def _iou(a, b):
-    ax1, ay1, ax2, ay2 = a["cx"] - a["w"] / 2, a["cy"] - a["h"] / 2, a["cx"] + a["w"] / 2, a["cy"] + a["h"] / 2
-    bx1, by1, bx2, by2 = b["cx"] - b["w"] / 2, b["cy"] - b["h"] / 2, b["cx"] + b["w"] / 2, b["cy"] + b["h"] / 2
+def _iou(baseline_det, ascend_det):
+    ax1, ay1, ax2, ay2 = (baseline_det["cx"] - baseline_det["w"] / 2,
+                          baseline_det["cy"] - baseline_det["h"] / 2,
+                          baseline_det["cx"] + baseline_det["w"] / 2,
+                          baseline_det["cy"] + baseline_det["h"] / 2)
+    bx1, by1, bx2, by2 = (ascend_det["cx"] - ascend_det["w"] / 2,
+                          ascend_det["cy"] - ascend_det["h"] / 2,
+                          ascend_det["cx"] + ascend_det["w"] / 2,
+                          ascend_det["cy"] + ascend_det["h"] / 2)
     ix1, iy1 = max(ax1, bx1), max(ay1, by1)
     ix2, iy2 = min(ax2, bx2), min(ay2, by2)
     inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
@@ -121,15 +127,19 @@ def _iou(a, b):
 
 
 def run_compare(args):
-    def load(path):
+    def load_detections_by_frame(path):
         by_frame = {}
-        for line in open(path):
-            obj = json.loads(line)
-            by_frame[obj["frame"]] = obj["dets"]
+        with open(path) as source:
+            for line in source:
+                obj = json.loads(line)
+                frame = obj["frame"]
+                if frame in by_frame:
+                    sys.exit(f"duplicate frame {frame} in {path}")
+                by_frame[frame] = obj["dets"]
         return by_frame
 
-    base = load(args.baseline)
-    asc = load(args.ascend)
+    base = load_detections_by_frame(args.baseline)
+    asc = load_detections_by_frame(args.ascend)
     valid_frames = [f for f in sorted(base) if base[f]]
     compared = valid_frames[: args.valid_frames]
     worst_iou, max_conf_err = 1.0, 0.0
@@ -172,7 +182,8 @@ def run_compare(args):
             frames_passed += 1
         detail.append({"frame": f, "ok": frame_ok, "baseline_dets": len(b_dets),
                        "ascend_dets": len(a_dets)})
-    passed = frames_passed == len(compared) and len(compared) > 0
+    enough_valid_frames = len(compared) == args.valid_frames
+    passed = enough_valid_frames and frames_passed == len(compared)
     report = {
         "schema": "cosmo-edge.ascend310p3-validate/v1",
         "baseline": args.baseline,
@@ -181,6 +192,7 @@ def run_compare(args):
         "max_conf_err": args.max_conf_err,
         "conf_threshold": args.conf,
         "valid_frames_requested": args.valid_frames,
+        "valid_frames_available": len(valid_frames),
         "frames_compared": len(compared),
         "frames_passed": frames_passed,
         "matched_pairs": pairs,
