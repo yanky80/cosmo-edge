@@ -520,6 +520,101 @@ NV12→RGB888 颜色顺序、letterbox 几何、`/255` 归一化与 OM 契约匹
 > 系统 ffmpeg 与自定义 ascend ffmpeg 的 150~180 帧均与参考 PNG MAE≈37）；
 > 因此本 issue 改用「同一解码帧直接对照 Ultralytics」的地面真值，不引用该张量。
 
+#### Issue #32：FFmpeg 设备帧直通 DVPP（2026-08-06，已执行）
+
+真机探针确认定制 FFmpeg 4.4.1 fork 的设备帧 ABI（`hwcontext_ascend.c` 的
+`ascend_get_buffer`，与 fork 内文档「`frame->data[i]` 与系统内存帧完全一致
+（CUDA 风格）」一致）：
+
+- 像素格式 `AV_PIX_FMT_ASCEND`（枚举值 119 = `AV_PIX_FMT_CUDA - 1`，fork 插在
+  `D3D11VA_VLD` 与 `CUDA` 之间）。系统 FFmpeg 头缺少该枚举，`VideoDecoderAscend.h`
+  补充 `AV_PIX_FMT_CUDA - 1` 的 fallback 定义，保持 hermetic 契约检查可编译。
+- 解码帧是单 `buf[0]` `AVBufferRef`（`hi_mpi_dvpp_malloc` 池，size =
+  pitch × vertical_stride × 3/2，1280x720 为 1382400）；`data[0]` = Y 基址
+  （DVPP 设备地址）、`data[1] = data[0] + linesize[0] × vertical_stride`
+  （alignment-1 布局）、`linesize[0] == linesize[1]`（1280x720 为 1280）；
+  `hw_frames_ctx` 已设置。
+- `frame->height` 可能是 VDEC 的 height stride（如 1088），vertical stride 必须
+  从 UV 指针偏移反推，不能取 `frame->height`。
+- 把 `frame->data[0]` 直接交给 DVPP VPC 消费有效（探针 5/5 次运行，
+  submit≈188µs、wait≈685µs，像素正常），零拷贝成立。
+
+实现（对照验收标准）：
+
+- `VideoDecoderAscend`：`SelectAscendPixelFormat` 优先协商 `AV_PIX_FMT_ASCEND`，
+  host NV12 作为无法导出设备面时的回退；`BuildAscendDeviceSurface` 按上述 ABI
+  校验地址/平面/行距/大小并从指针偏移推导 vertical stride；`FrameSurface::Device`
+  的 `lifetime` 持有 `AVFrame`（`av_frame_move_ref`），保证设备内存在 DVPP
+  消费完成前有效。
+- `AscendImageToTensorNode`：Device surface 直接把解码器的 DVPP 缓冲交给 VPC
+  任务（无 H2D 上传、无中间 host 图像），host NV12 阶段一上传路径保留；日志
+  打印 `input=device|host` 便于确认推理路径没有静默下载。
+- 新增 `DownloadAscendDeviceSurfaceToHost`（独立进程级 ACL context 的按需 D2H
+  拷贝），只服务预览/抓图/OSD；推理路径不经过它。
+- 根因修复：FFmpeg 解码器先 `aclInit`，NN 后端 `EnsureAclInitialized` 再初始化
+  时收到 `ACL_ERROR_REPEAT_INITIALIZE`(100002)，现视为成功。
+- 无效/过期设备面在 `ValidateSurface` 明确拒绝（无 `lifetime` 持有者、几何越界
+  等 8 类，契约检查覆盖）；无法导出设备面的源走阶段一 host NV12 转移路径。
+
+构建与运行（310P3 测试机 `/root/cosmo-edge-issue32`，rsync 自本分支，
+`source /usr/local/Ascend/ascend-toolkit/set_env.sh`；逐条命令同时写在冒烟
+文件头注释）：
+
+```bash
+./ascend_device_frame_smoke --video /tmp/subway_test_h264.mp4 --frames 30
+./ascend_device_frame_smoke --video /tmp/subway_test_h265.mp4 --frames 30
+./ascend_decoder_smoke32 --h264 /tmp/cosmo_baseline_h264.264 --h265 /tmp/cosmo_baseline_h265.h265
+./ascend_video_detect_smoke32 --om /opt/convert/bjsubway-yolo26/model.om --video /tmp/subway_test_h264.mp4 --frames 75 --conf 0.25 --expect-detections
+./ascend_video_detect_smoke32 --om /opt/convert/bjsubway-yolo26/model.om --video /tmp/subway_test_h265.mp4 --frames 75 --conf 0.25 --expect-detections
+```
+
+实测结果（`uname -a`：`Linux tjx-Default-string 5.15.0-25-generic x86_64`；
+310P3 设备 0，Health OK）：
+
+```text
+$ ./ascend_device_frame_smoke --video /tmp/subway_test_h264.mp4 --frames 30
+summary: frames=30 device_direct_avg=16382.3us host_stage_one_avg=16828.4us
+  decode=30 frames in 44ms e2e=643ms (46.7 fps incl. decode)
+smoke OK
+
+$ ./ascend_device_frame_smoke --video /tmp/subway_test_h265.mp4 --frames 30
+summary: frames=30 device_direct_avg=16316.7us host_stage_one_avg=16762.8us
+  decode=30 frames in 38ms e2e=634ms (47.3 fps incl. decode)
+smoke OK
+
+$ ./ascend_decoder_smoke32 --h264 /tmp/cosmo_baseline_h264.264 --h265 /tmp/cosmo_baseline_h265.h265
+source passed: /tmp/cosmo_baseline_h264.264 codec=h264_ascend frames=30
+  fmt=ascend-device planes=2 pitch=320 rows=240 size=230400
+source passed: /tmp/cosmo_baseline_h265.h265 codec=h265_ascend frames=30
+  fmt=ascend-device planes=2 pitch=320 rows=240 size=230400
+  （lifetime 持有 AVFrame，on-demand host copy 非零字节）
+
+$ ./ascend_video_detect_smoke32 --om /opt/convert/bjsubway-yolo26/model.om     --video /tmp/subway_test_h264.mp4 --frames 75 --conf 0.25 --expect-detections
+  det[0] cx=559.4-559.9 cy=417.0-417.1 w=664.8-666.2 h=299.8-300.0 score=0.9458-0.9468 class=2
+e2e=75 frames in 2.69s (27.9 fps incl. decode)
+detected_frames=75/75 (conf>=0.25)
+smoke OK
+
+$ ./ascend_video_detect_smoke32 --om /opt/convert/bjsubway-yolo26/model.om     --video /tmp/subway_test_h265.mp4 --frames 75 --conf 0.25 --expect-detections
+  det[0] cx=559.8-560.4 cy=416.9-417.1 w=666.5-667.5 h=299.8-300.2 score=0.9453-0.9463 class=2
+e2e=75 frames in 2.69s (27.9 fps incl. decode)
+detected_frames=75/75 (conf>=0.25)
+smoke OK
+
+```
+
+对照：设备帧直通端到端检测 `cx=559.4–560.4, cy=416.9–417.1,
+w=664.8–667.5, h=299.8–300.2, score=0.945–0.947, class=2` 与 Issue #31 阶段一
+host NV12 基线的 `(559.9–560.2, 416.9–417.1, 665.2–667.5, 299.8–300.2)
+score≈0.946` 一致（DVPP 容差内），证明去掉中间 host 图像后颜色顺序、letterbox
+几何与 OM 契约不变；`device_direct_avg` 比 `host_stage_one_avg` 快约
+0.4ms/帧（h264 16382 vs 16828µs，h265 16317 vs 16763µs），差异即 host 路径的
+D2H 下载 + H2D 上传开销（约 300µs 上传 + 其余搬运），其余为 DVPP 与归一化
+共摊的测量噪声。
+
+本地契约检查：`scripts/ascend_decoder_contract_check.sh` → 145 断言 / 8 用例
+全绿（含设备面 ABI 校验、padded stride 推导与 8 类无效面拒绝）。
+
 RTSP 实时流检测与 `COSMO_TARGET_ARCH=aarch64`（经跳板机）冒烟：
 未执行（无主机访问权限）。
 

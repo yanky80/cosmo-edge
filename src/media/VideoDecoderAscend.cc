@@ -36,16 +36,24 @@ const char* AscendDecoderNameForCodec(VideoCodecType codec_type) {
     }
 }
 
-AVPixelFormat SelectAscendNv12PixelFormat(const AVPixelFormat* formats) {
+AVPixelFormat SelectAscendPixelFormat(const AVPixelFormat* formats) {
     if (formats == nullptr) {
         return AV_PIX_FMT_NONE;
     }
+    AVPixelFormat nv12 = AV_PIX_FMT_NONE;
     for (const AVPixelFormat* format = formats; *format != AV_PIX_FMT_NONE; ++format) {
-        if (*format == AV_PIX_FMT_NV12) {
-            return AV_PIX_FMT_NV12;
+        if (*format == AV_PIX_FMT_ASCEND) {
+            // Device frames: DVPP consumes the AVFrame buffer directly, no
+            // intermediate host image and no per-frame H2D upload.
+            return AV_PIX_FMT_ASCEND;
+        }
+        if (nv12 == AV_PIX_FMT_NONE && *format == AV_PIX_FMT_NV12) {
+            nv12 = AV_PIX_FMT_NV12;
         }
     }
-    return AV_PIX_FMT_NONE;
+    // Stage-one fallback: the source cannot export a device surface, so the
+    // decoder hands out host NV12 and image_to_tensor uploads it (H2D).
+    return nv12;
 }
 
 bool BuildAscendNv12Surface(const AVFrame& frame, FrameSurface& surface, std::string& error) {
@@ -107,6 +115,82 @@ bool BuildAscendNv12Surface(const AVFrame& frame, FrameSurface& surface, std::st
     return true;
 }
 
+bool BuildAscendDeviceSurface(const AVFrame& frame, FrameSurface& surface, std::string& error) {
+    if (frame.format != AV_PIX_FMT_ASCEND) {
+        error = "decoded frame format is not the Ascend device format";
+        return false;
+    }
+    if (frame.hw_frames_ctx == nullptr) {
+        error = "Ascend device frame is missing its hw_frames_ctx";
+        return false;
+    }
+    if (frame.width <= 0 || frame.height <= 0 || (frame.width % 2) != 0 || (frame.height % 2) != 0) {
+        error = "decoded frame has invalid dimensions";
+        return false;
+    }
+    if (frame.data[0] == nullptr || frame.data[1] == nullptr) {
+        error = "device frame plane pointers missing";
+        return false;
+    }
+    if (frame.buf[0] == nullptr || frame.buf[0]->data == nullptr || frame.buf[0]->size == 0) {
+        error = "device frame must carry one AVBufferRef backing both planes";
+        return false;
+    }
+    if (frame.linesize[1] != frame.linesize[0]) {
+        error = "device frame planes must share the same pitch";
+        return false;
+    }
+    const size_t pitch = static_cast<size_t>(frame.linesize[0]);
+    if (pitch < static_cast<size_t>(frame.width) || (pitch % 2) != 0) {
+        error = "device frame plane pitch is invalid";
+        return false;
+    }
+
+    const uintptr_t buf_addr = reinterpret_cast<uintptr_t>(frame.buf[0]->data);
+    const size_t buf_size    = frame.buf[0]->size;
+    const uintptr_t y_addr   = reinterpret_cast<uintptr_t>(frame.data[0]);
+    const uintptr_t uv_addr  = reinterpret_cast<uintptr_t>(frame.data[1]);
+    const size_t y_offset    = y_addr - buf_addr;
+    const size_t uv_offset   = uv_addr - buf_addr;
+    if (uv_addr < y_addr || y_addr < buf_addr || uv_addr - buf_addr >= buf_size) {
+        error = "device plane pointers are outside the backing buffer";
+        return false;
+    }
+    if (uv_offset <= y_offset || uv_offset % pitch != 0) {
+        error = "device frame UV plane offset is not pitch-aligned";
+        return false;
+    }
+    // The fork's alignment-1 pool layout puts UV right after the Y rows, so
+    // the true DVPP picture_height_stride is derived from the pointer
+    // distance, not from frame->height (which carries the VDEC height stride
+    // and can exceed the display height on padded frames).
+    const size_t vertical_stride = (uv_offset - y_offset) / pitch;
+    if (vertical_stride < static_cast<size_t>(frame.height) / 2 || (vertical_stride % 2) != 0 ||
+        vertical_stride * pitch > buf_size - y_offset) {
+        error = "device frame vertical stride or Y span exceeds its backing buffer";
+        return false;
+    }
+    const size_t chroma_stride = vertical_stride / 2;
+    if (uv_offset + chroma_stride * pitch > buf_size) {
+        error = "device frame UV span exceeds its backing buffer";
+        return false;
+    }
+
+    // FramePlane::GetPlaneData() is virt_addr + offset, so virt_addr is the
+    // backing buffer base (buf[0]->data) and each plane carries its offset
+    // within it, matching the RK3588 DMA-Buf and host NV12 plane contract.
+    surface.planes.clear();
+    surface.planes.push_back(FramePlane{-1, frame.buf[0]->data, y_offset, pitch, vertical_stride, buf_size});
+    surface.planes.push_back(FramePlane{-1, frame.buf[0]->data, uv_offset, pitch, chroma_stride, buf_size});
+    surface.memory_type = FrameSurfaceMemoryType::Device;
+    if (!surface.IsValid()) {
+        error = "device plane size metadata is invalid";
+        surface.planes.clear();
+        return false;
+    }
+    return true;
+}
+
 VideoDecoderAscend::VideoDecoderAscend(size_t name) : VideoDecoder(name) {}
 
 VideoDecoderAscend::~VideoDecoderAscend() {
@@ -114,9 +198,9 @@ VideoDecoderAscend::~VideoDecoderAscend() {
 }
 
 AVPixelFormat VideoDecoderAscend::GetFormat(AVCodecContext* ctx, const AVPixelFormat* formats) {
-    const AVPixelFormat selected = SelectAscendNv12PixelFormat(formats);
+    const AVPixelFormat selected = SelectAscendPixelFormat(formats);
     if (selected == AV_PIX_FMT_NONE) {
-        LOG_WARN("{} Ascend decoder refused non-NV12 pixel format negotiation",
+        LOG_WARN("{} Ascend decoder refused non-device/non-NV12 pixel format negotiation",
                  ctx == nullptr ? -1 : ctx->codec_type);
     }
     return selected;
@@ -270,7 +354,12 @@ VideoFramePtr VideoDecoderAscend::GetFrame() {
 
     FrameSurface surface;
     std::string error;
-    if (!BuildAscendNv12Surface(*owned_frame, surface, error)) {
+    if (owned_frame->format == AV_PIX_FMT_ASCEND) {
+        if (!BuildAscendDeviceSurface(*owned_frame, surface, error)) {
+            LOG_WARN("{} Ascend device surface validation failed: {}", idx_name_, error);
+            return nullptr;
+        }
+    } else if (!BuildAscendNv12Surface(*owned_frame, surface, error)) {
         LOG_WARN("{} Ascend NV12 surface validation failed: {}", idx_name_, error);
         return nullptr;
     }

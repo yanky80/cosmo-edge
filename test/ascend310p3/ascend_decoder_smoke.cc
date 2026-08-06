@@ -1,26 +1,32 @@
-// Host-level runnable check for issue #30: decode existing local-file and RTSP
-// packets with the test host's custom Ascend FFmpeg and expose host NV12
-// surfaces via VideoFrame/FrameSurface.
+// Host-level runnable check for issue #30/#32: decode existing local-file and
+// RTSP packets with the test host's custom Ascend FFmpeg and expose device
+// (AV_PIX_FMT_ASCEND) NV12 surfaces via VideoFrame/FrameSurface.
 //
 // The smoke drives the real engine decoder class where the full engine build
 // is not available yet on the 310P3 host (the Ascend NN backend is a separate
 // follow-up issue):
-//   - media::VideoDecoderAscend (h264_ascend/h265_ascend, host NV12 surfaces)
+//   - media::VideoDecoderAscend (h264_ascend/h265_ascend, device NV12
+//     surfaces; host NV12 fallback kept for sources without device export)
+//   - media::DownloadAscendDeviceSurfaceToHost (on-demand D2H copy for
+//     preview/snapshot/OSD consumers; never used by the inference path)
 //
 // Built standalone on the 310P3 host against /opt/ffmpeg-4.4.1/ascend:
+//   source /usr/local/Ascend/ascend-toolkit/set_env.sh
 //   g++ -std=c++17 -O2 -I src -I 3rd/fmt-7.1.2/include \
 //     test/ascend310p3/ascend_decoder_smoke.cc \
 //     3rd/fmt-7.1.2/src/format.cc \
 //     src/media/VideoDecoder.cc \
 //     src/media/VideoDecoderCreateAscend.cc \
-//     src/media/VideoDecoderAscend.cc src/media/VideoFrame.cc \
-//     src/media/PixelFormatUtils.cc \
+//     src/media/VideoDecoderAscend.cc src/media/VideoDecoderAscendHostCopy.cc \
+//     src/media/VideoFrame.cc src/media/PixelFormatUtils.cc \
 //     src/mem/MemoryPoolMng.cc src/mem/FixedBlockPool.cc \
 //     src/mem/AllocatorCpu.cc src/mem/BlockFreqCalc.cc \
 //     src/util/Thread.cc src/util/ThreadRegistry.cc src/util/TimeUtil.cc \
 //     -I/opt/ffmpeg-4.4.1/ascend/include \
 //     -L/opt/ffmpeg-4.4.1/ascend/lib -lavformat -lavcodec -lavutil \
-//     -Wl,-rpath,/opt/ffmpeg-4.4.1/ascend/lib -lpthread \
+//     -Wl,-rpath,/opt/ffmpeg-4.4.1/ascend/lib \
+//     -L"${ASCEND_TOOLKIT_HOME}/lib64" -lascendcl \
+//     -Wl,-rpath,"${ASCEND_TOOLKIT_HOME}/lib64" -lpthread \
 //     -o ascend_decoder_smoke
 //
 // Usage: ascend_decoder_smoke [--h264 file] [--h265 file] [--rtsp url]
@@ -60,6 +66,7 @@ extern "C" {
 #include "media/FrameSurface.h"
 #include "media/PixelFormat.h"
 #include "media/VideoDecoder.h"
+#include "media/VideoDecoderAscend.h"
 #include "media/VideoFrame.h"
 #include "mem/AllocatorCpu.h"
 #include "mem/MemoryPoolMng.h"
@@ -258,18 +265,38 @@ void CheckDecodedFrame(const cosmo::media::VideoFramePtr& frame, int width, int 
 
     const auto surface = frame->GetSurface();
     Require(surface != nullptr && surface->IsValid(), "decoded frame surface is invalid");
-    Require(surface->memory_type == cosmo::media::FrameSurfaceMemoryType::Host,
-            "decoded surface is not host memory");
+    Require(surface->memory_type == cosmo::media::FrameSurfaceMemoryType::Device,
+            "decoded surface is not Ascend device memory (issue #32 device frames)");
+    Require(surface->lifetime != nullptr, "decoded surface has no AVFrame lifetime holder");
     Require(surface->planes.size() == 2, "NV12 surface must expose two planes");
     for (int plane = 0; plane < 2; ++plane) {
         const auto& p = surface->planes[static_cast<size_t>(plane)];
-        Require(p.virt_addr != nullptr, "NV12 plane has no host pointer");
+        Require(p.virt_addr != nullptr, "NV12 plane has no device pointer");
         Require(p.pitch >= static_cast<size_t>(width), "NV12 plane pitch is shorter than the width");
         const size_t min_rows = plane == 0 ? static_cast<size_t>(height) : static_cast<size_t>(height) / 2;
         Require(p.vertical_stride >= min_rows, "NV12 plane vertical stride is shorter than the height");
         Require(p.size >= p.pitch * p.vertical_stride, "NV12 plane backing size is too small");
         Require(p.offset + p.pitch * min_rows <= p.size, "NV12 plane span exceeds its backing buffer");
     }
+    // Preview/snapshot/OSD consumers can request a host copy on demand; the
+    // inference path never calls this.
+    std::vector<uint8_t> host_nv12;
+    std::string copy_error;
+    Require(cosmo::media::DownloadAscendDeviceSurfaceToHost(*surface, width, height, host_nv12, copy_error),
+            "on-demand device->host copy failed: " + copy_error);
+    const size_t expect_bytes =
+        static_cast<size_t>(surface->planes[0].pitch) * static_cast<size_t>(height) * 3 / 2;
+    Require(host_nv12.size() == expect_bytes, "host copy has the wrong byte size");
+    bool any_nonzero = false;
+    for (const uint8_t byte : host_nv12) {
+        if (byte != 0) {
+            any_nonzero = true;
+            break;
+        }
+    }
+    Require(any_nonzero, "host copy is all zeros");
+    Require(frame->GetHostData() == nullptr,
+            "inference frame must not construct host data (zero-copy device path)");
 }
 
 void CheckGate0Decoders() {
@@ -377,7 +404,7 @@ void RunSource(const std::string& url, int frames_needed) {
     const auto& first = frames.front()->GetSurface();
     std::cout << "source passed: " << url << " codec="
               << (codec_type == cosmo::media::VideoCodecType::kH265 ? "h265_ascend" : "h264_ascend")
-              << " frames=" << frames.size() << " fmt=nv12 planes=" << first->planes.size()
+              << " frames=" << frames.size() << " fmt=ascend-device planes=" << first->planes.size()
               << " pitch=" << first->planes[0].pitch << " rows=" << first->planes[0].vertical_stride
               << " size=" << first->TotalSize() << "\n";
 }

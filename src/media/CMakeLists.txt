@@ -58,8 +58,11 @@ set(MEDIA_RK3588_SRC
 )
 
 # Ascend-specific source files (custom Ascend FFmpeg hardware decoding).
+# VideoDecoderAscendHostCopy.cc needs the CANN SDK, so it is only compiled
+# under the Ascend media backend, never in the hermetic decoder contract check.
 set(MEDIA_ASCEND_SRC
     VideoDecoderAscend.cc         VideoDecoderAscend.h
+    VideoDecoderAscendHostCopy.cc
     VideoDecoderCreateAscend.cc
 )
 
@@ -81,7 +84,8 @@ elseif(COSMO_MEDIA_USE_RK3588_BACKEND)
     add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_RK3588_SRC})
 elseif(COSMO_MEDIA_USE_ASCEND_BACKEND)
     # Ascend media backend: custom Ascend FFmpeg hard decoding
-    # (h264_ascend/h265_ascend) to host NV12 FrameSurfaces, plus the generic
+    # (h264_ascend/h265_ascend) to device AV_PIX_FMT_ASCEND FrameSurfaces
+    # (host NV12 fallback for sources without device export), plus the generic
     # host-copy path for task-side preview/OSD/record consumers.
     add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_ASCEND_SRC} ${MEDIA_ASCEND_HOST_SRC})
 elseif(COSMO_MEDIA_USE_CPU_BACKEND)

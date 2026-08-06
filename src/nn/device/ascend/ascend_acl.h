@@ -17,6 +17,11 @@ inline aclError EnsureAclInitialized() {
     static aclError init_result = ACL_SUCCESS;
     std::call_once(init_flag, []() {
         init_result = aclInit(nullptr);
+        // The Ascend media decoder (custom FFmpeg) may have called aclInit
+        // first; CANN reports that as ACL_ERROR_REPEAT_INITIALIZE (100002),
+        // which is not an error for this helper.
+        if (init_result == ACL_ERROR_REPEAT_INITIALIZE)
+            init_result = ACL_SUCCESS;
         if (init_result == ACL_SUCCESS)
             std::atexit([]() { (void)aclFinalize(); });
     });
