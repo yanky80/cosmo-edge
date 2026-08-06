@@ -36,6 +36,10 @@ namespace media {
             return static_cast<uint8_t>(std::clamp(value, 0, 255));
         }
 
+        inline bool IsHostSurface(const FrameSurfacePtr& surface) {
+            return surface != nullptr && surface->memory_type == FrameSurfaceMemoryType::Host;
+        }
+
         VideoFramePtr ConvertI420ToPacked(VideoFramePtr frame, PixelFormat dst_fmt, const char* caller) {
             if (!VideoFrameValid(frame)) {
                 LOG_ERRO("{}() - invalid frame", caller);
@@ -157,6 +161,35 @@ namespace media {
         auto* dst_data = dst->GetData();
         if (src_data && dst_data) {
             std::memcpy(dst_data, src_data, frame->GetSize());
+        } else if (dst_data) {
+            // Multi-plane host surface (Ascend VDEC NV12: separate Y/UV host
+            // buffers) has no contiguous base pointer; row-copy each plane
+            // into the tight pool layout, honoring per-plane line pitch.
+            auto surface   = frame->GetSurface();
+            const auto fmt = frame->GetPixelFormat();
+            if (IsHostSurface(surface) && (fmt == PixelFormat::PIXEL_NV12 || fmt == PixelFormat::PIXEL_NV21 ||
+                                           fmt == PixelFormat::PIXEL_I420)) {
+                const size_t w       = frame->GetWidth();
+                const size_t h       = frame->GetHeight();
+                const size_t rows[3] = {h, h / 2, h / 2};
+                // NV12/NV21 chroma planes are interleaved (w bytes/row),
+                // I420 chroma planes are planar (w/2 bytes/row).
+                size_t row_bytes[3] = {w, w / 2, w / 2};
+                if (fmt != PixelFormat::PIXEL_I420) {
+                    row_bytes[1] = w;
+                }
+                size_t dst_offset = 0;
+                for (size_t i = 0; i < std::min<size_t>(3, surface->planes.size()); ++i) {
+                    const auto& p    = surface->planes[i];
+                    const size_t row = std::min(p.pitch, row_bytes[i]);
+                    auto* src        = p.virt_addr + p.offset;
+                    auto* out        = dst_data + dst_offset;
+                    for (size_t r = 0; r < rows[i]; ++r) {
+                        std::memcpy(out + r * row, src + r * p.pitch, row);
+                    }
+                    dst_offset += rows[i] * row;
+                }
+            }
         }
         return dst;
     }
@@ -166,7 +199,13 @@ namespace media {
         if (!frame || !frame->Active()) {
             return false;
         }
-        return frame->GetData() != nullptr;
+        if (frame->GetData()) {
+            return true;
+        }
+        // Multi-plane host surfaces (Ascend VDEC NV12) have no contiguous base
+        // pointer; their planes are host memory that consumers can read.
+        auto surface = frame->GetSurface();
+        return IsHostSurface(surface) && surface->IsValid();
     }
 
     int VideoFrameProcCpu::MapToAVPixelFormat(PixelFormat pf) {
@@ -273,7 +312,17 @@ namespace media {
             }
         };
 
-        setup_planes(src_data, src_fmt, src_planes, src_strides);
+        // Multi-plane host surfaces (Ascend VDEC NV12) have no contiguous base
+        // pointer; feed sws from per-plane pointers and line pitch instead.
+        auto src_surface = frame->GetSurface();
+        if (!src_data && IsHostSurface(src_surface)) {
+            for (size_t i = 0; i < src_surface->planes.size() && i < 4; ++i) {
+                src_planes[i]  = src_surface->GetPlaneData(i);
+                src_strides[i] = static_cast<int>(src_surface->planes[i].pitch);
+            }
+        } else {
+            setup_planes(src_data, src_fmt, src_planes, src_strides);
+        }
         setup_planes(dst_data, dst_fmt, dst_planes, dst_strides);
 
         sws_scale(sws_ctx, src_planes, src_strides, 0, h, dst_planes, dst_strides);

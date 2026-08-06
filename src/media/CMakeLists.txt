@@ -66,6 +66,18 @@ set(MEDIA_ASCEND_SRC
     VideoDecoderCreateAscend.cc
 )
 
+# Host-side consumers (preview, capture, OSD, record, stream push) reuse the
+# generic CPU frame processing and encoder over the host NV12 surfaces the
+# Ascend hardware decoder produces. No CPU software decoder is compiled:
+# COSMO_MEDIA_USE_ASCEND_BACKEND keeps VideoDecoder::Create on the Ascend
+# factory so unsupported codecs fail instead of falling back.
+set(MEDIA_ASCEND_HOST_SRC
+    VideoEncoderCreateCpu.cc
+    VideoEncoderCpu.cc            VideoEncoderCpu.h
+    VideoFrameProcFactoryCpu.cc
+    VideoFrameProcCpu.cc          VideoFrameProcCpu.h
+)
+
 if(COSMO_MEDIA_USE_SOPHON_BACKEND)
     add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_SOPHON_SRC})
 elseif(COSMO_MEDIA_USE_RK3588_BACKEND)
@@ -73,8 +85,9 @@ elseif(COSMO_MEDIA_USE_RK3588_BACKEND)
 elseif(COSMO_MEDIA_USE_ASCEND_BACKEND)
     # Ascend media backend: custom Ascend FFmpeg hard decoding
     # (h264_ascend/h265_ascend) to device AV_PIX_FMT_ASCEND FrameSurfaces
-    # (host NV12 fallback for sources without device export).
-    add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_ASCEND_SRC})
+    # (host NV12 fallback for sources without device export), plus the generic
+    # host-copy path for task-side preview/OSD/record consumers.
+    add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_ASCEND_SRC} ${MEDIA_ASCEND_HOST_SRC})
 elseif(COSMO_MEDIA_USE_CPU_BACKEND)
     add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_CPU_SRC})
 else()

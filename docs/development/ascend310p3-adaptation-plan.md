@@ -633,6 +633,108 @@ NPU 和内存峰值。首期输出性能报告，但不设置 FPS 阻塞门槛�
 所有硬件测试使用 `AGENTS.md` 中的本地锁串行执行，并在 pull request 中记录准确命令和
 相关结果。
 
+
+#### Issue #33：本地文件 / RTSP YOLO26 检测任务（2026-08-06，已执行）
+
+把已打通的全链路（demux → `h264_ascend`/`h265_ascend` 硬解码 → DVPP
+`image_to_tensor` → AscendCL `net` → host `yolo_e2e_decode`）接入产品任务生命周期：
+本地 H.264/H.265 文件、RTSP 源、RTSP 断线重连、重复启停、单卡 1/3 实例池策略、
+错误上抛（无软件推理兜底）、preview 等任务侧消费方的 host-copy 路径。
+
+冒烟程序 `test/ascend310p3/ascend_task_smoke.cc` 直接驱动真实引擎路径并复用
+`AscendVideoDetectSmoke` 的构建方式（命令见文件头注释；构建脚本
+`/root/cosmo-edge-issue33/build_task_smoke.sh`，rsync 自本分支，含
+`src/media/VideoFrameProcCpu.cc`、`src/flow/channel/AlgChannelDecode.cc` 等）。
+
+**真机发现的关键驱动问题（VDEC/VPC 楔死）**
+
+1. **VDEC 通道销毁后无法重开**：一旦 VDEC 通道与 VPC 通道共存后销毁（RTSP
+   重连 / 文件重启时 decoder Close→Open），之后每次 VDEC 重开会收包但回调线程
+   永久循环在 `HI_ERR_VDEC_BUF_EMPTY`（`0xA005800E`），drain 0 帧；teardown
+   时 `Decode sem_timewait=-1` 直接 abort（rc=134）。尝试过的
+   `hi_mpi_sys_exit`、每轮换通道号、`hi_mpi_vdec_reset_chn`、VDEC/VPC 销毁顺序
+   调换、整库 deinit 均无效（`hi_mpi_sys_init/exit` 是引用计数的）。
+2. **可用模式**：一个持久 VDEC 通道跨 demux 会话复用（正是产品 RTSP 重连/文件
+   重启的形态），VPC 通道存活时复测 r1/r2/r3 均 75/75。
+3. **两个配套约束**：Ascend FFmpeg 解码器只在包到达时近似实时出帧（批量喂 ≈1/75，
+   10~50ms 节奏喂 ≈70/75），冒烟按节奏喂包；EOS flush 会永久禁用该通道
+   （`send err -541478725`），任务中途**绝不 flush**。
+
+产品修复（`src/flow/channel/AlgChannelDecode.cc` + `src/media/VideoDecoder.h` /
+`VideoDecoderAscend.h`）：`VideoDecoder` 新增 `ShouldReuseAcrossStreamChange()`，
+Ascend 后端返回 true——流切换时只重置逐流簿记（`frame_info_`、`stream_index_`、
+`decode_count_`、`frame_index_`），不再 Close/Open VDEC 通道；异常路径
+（`codec_reset_sign_`）同样不再 Close/Open（避免触发楔死），只重置簿记并清除
+复位标记；`decoder_->Open()` 失败会置 `DecoderFrameFailed` 任务状态（无软件
+推理兜底）。其他后端行为不变。持久通道固定首个流的 codec/分辨率，中途换码流
+需重启任务（Close/Open 在 VPC 存活时会楔死 310P3），换码流会以解码失败上抛。
+
+预览 host-copy 修复（`src/media/VideoFrameProcCpu.cc`）：Ascend VDEC 的 NV12
+`FrameSurface` 是 Y/UV 两块独立 host plane（`GetContiguousData()` 为空），
+`EnsureHostData()` 改为同时接受「有有效 plane 的 host surface」；
+`ConvertPixelFormat`/`CopyFrame` 在无连续基址时改用
+`planes[i].virt_addr + offset` 与 `linesize(pitch)` 喂 sws / 逐行拷贝，覆盖
+`StreamViewerEncoder` 预览、`TaskAlarmPicture` 抓拍、`EncodeJpeg` 等任务侧
+host-copy 消费方。合并 Issue #32（device 帧优先）后，解码器默认输出
+`AV_PIX_FMT_ASCEND` device surface：推理 blob 包装（`AiComponment` 与
+`ascend_task_smoke` 的 `MakeSurfaceBlob`）同时接受 Host/Device 表面；
+preview 的 host-copy 对 device surface 走
+`DownloadAscendDeviceSurfaceToHost`（`VideoDecoderAscendHostCopy.cc`）按需
+D2H 下载后复用同一套 host NV12 检查（sws NV12→I420 与 JPEG 抓拍）。
+
+实例池（`src/service/ai/impl/InferPoolServiceImpl.cc`）：Ascend 后端
+`DetectorPool(alg_code, 1, 3)`——每个任务一个 ACL 实例，最多三个，不加第二
+worker 池；`ascend_task_smoke` 的 `CheckDetectorPoolPolicy` 验证三任务各持一
+实例、第四个任务拿不到实例。
+
+构建与运行（310P3 测试机 `/root/cosmo-edge-issue33`，`uname -a`：
+`Linux tjx-Default-string 5.15.0-25-generic x86_64`；`npu-smi`：310P3 Health OK，
+设备 0）：
+
+```bash
+# 冒烟构建
+bash /root/cosmo-edge-issue33/build_task_smoke.sh   # 末尾打印 SMOKE_BUILD_OK
+# H.264 / H.265 本地文件，各 2 轮（重复启停）
+./ascend_task_smoke --om /opt/convert/bjsubway-yolo26/model.om \
+  --video /tmp/subway_test_h264.mp4 --frames 70 --rounds 2 --expect-detections
+./ascend_task_smoke --om /opt/convert/bjsubway-yolo26/model.om \
+  --video /tmp/subway_test_h265.mp4 --frames 70 --rounds 2 --expect-detections
+# 单卡 3 实例
+./ascend_task_smoke --om /opt/convert/bjsubway-yolo26/model.om \
+  --video /tmp/subway_test_h264.mp4 --frames 70 --rounds 2 --instances 3 --expect-detections
+# RTSP 断线重连（任务中途 kill 掉发布进程再重启）
+./ascend_task_smoke --om /opt/convert/bjsubway-yolo26/model.om \
+  --video rtsp://127.0.0.1:8554/stream --frames 120 --rtsp-reconnect \
+  --rtsp-source /tmp/subway_test_h264.264 \
+  --rtsp-python /root/cosmo-edge-issue33/test/ascend310p3/rtsp_test_source.py --expect-detections
+# preview host-copy（NV12 → I420 + JPEG 抓拍）
+./ascend_task_smoke --om /opt/convert/bjsubway-yolo26/model.om \
+  --video /tmp/subway_test_h264.mp4 --frames 10 --preview-check
+```
+
+运行结果（`--expect-detections`，模型 `/opt/convert/bjsubway-yolo26/model.om`，
+素材与 Issue #31 同源；地面真值 `cx≈560 cy≈417 w≈666 h≈300 score≈0.9468 class=2`）：
+
+```text
+H.264  --frames 70 --rounds 2   : decoded 70+70，detected_frames=140/140，task smoke OK
+H.265  --frames 70 --rounds 2   : decoded 70+70，detected_frames=140/140，task smoke OK
+3 实例 --frames 70 --rounds 2   : e2e=140 frames across 3 instances x 2 rounds，
+                                  detected_frames=140/140，task smoke OK
+RTSP 重连 --frames 120          : 发布进程被 kill 后重启，会话 75+120，
+                                  detected_frames=195/195，task smoke OK
+preview-check                   : preview sws NV12ToI420: ok；
+                                  preview host-copy passed: NV12 -> I420 host,
+                                  capture JPEG bytes=550291；task smoke OK
+```
+
+错误路径（每次运行先执行，硬件无关）：不支持的 codec（Mjpeg）拒绝 Open，坏 OM
+在 `Graph::Init` 抛错，均无软件推理兜底；`CheckErrorPaths` 打印
+`error paths passed: bad OM rejected / unsupported codec rejected with no fallback`。
+
+RK3588 板回归：未执行。本 issue 的 `ShouldReuseAcrossStreamChange()` 改动位于公共
+`AlgChannelDecode` 路径，默认返回 false 保持原有 Close/Open 行为；本地
+`scripts/test_target_platform_profiles.sh` 全绿覆盖其余后端编译。
+
 ## 首期不做
 
 - 多卡枚举、任务绑卡和跨卡调度。

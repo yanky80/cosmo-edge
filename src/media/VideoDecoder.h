@@ -28,6 +28,16 @@ namespace media {
         /// frames are delivered, not dropped, before teardown or stream switch.
         virtual bool Flush();
 
+        /// Whether one hardware channel can be reused across stream restarts
+        /// (new SPS/PPS mid-channel). The Ascend DVPP VDEC channel handles
+        /// stream changes natively; reopening the channel while the DVPP VPC
+        /// channel is alive wedges the next decode session on the 310P3, so
+        /// AlgChannelDecode keeps the channel open on stream change instead
+        /// of Close/Open (see docs/development/ascend310p3-adaptation-plan.md).
+        virtual bool ShouldReuseAcrossStreamChange() const {
+            return false;
+        }
+
         VideoFramePtr Decode(const uint8_t* pkt, size_t len, int64_t frame_idx, bool& result);
 
         virtual bool SendPacket(const uint8_t* pkt, size_t len, int64_t frame_idx) = 0;
