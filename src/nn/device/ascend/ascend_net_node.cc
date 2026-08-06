@@ -1,6 +1,7 @@
 #include "nn/device/ascend/ascend_net_node.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <memory>
 #include <new>
@@ -13,6 +14,7 @@
 #include "nn/utils/data_type_utils.h"
 #include "nn/utils/dims_vector_utils.h"
 #include "nn/utils/string_format.h"
+#include "util/Log.h"
 
 namespace cosmo::nn {
 
@@ -346,17 +348,21 @@ Status AscendNetNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_blobs,
                                                     " expected=" + std::to_string(input_bytes) +
                                                     " got=" + std::to_string(host_input_bytes));
 
+    using clock = std::chrono::steady_clock;
+
     // ACL context is thread-local; Forward may run on a different thread than
     // LoadWeight, so re-bind this graph's context before using its stream.
     const aclError ctx_ret = aclrtSetCurrentContext(context_);
     if (ctx_ret != ACL_SUCCESS)
         return MakeAclStatus(COSMO_NN_ERR_ASCEND_CONTEXT, "aclrtSetCurrentContext", "", ctx_ret);
 
-    aclError ret = aclrtMemcpyAsync(input_devices_[0], input_bytes, bottom_blobs[0]->GetHandle().base,
-                                    input_bytes, ACL_MEMCPY_HOST_TO_DEVICE, stream_);
+    const auto h2d_start = clock::now();
+    aclError ret         = aclrtMemcpyAsync(input_devices_[0], input_bytes, bottom_blobs[0]->GetHandle().base,
+                                            input_bytes, ACL_MEMCPY_HOST_TO_DEVICE, stream_);
     if (ret != ACL_SUCCESS)
         return MakeAclStatus(COSMO_NN_ERR_ASCEND_MEMCPY, "input-h2d",
                              "tensor=input[0] size=" + std::to_string(input_bytes), ret);
+    const auto execute_start = clock::now();
 
     ret = aclmdlExecuteAsync(model_id_, input_dataset_, output_dataset_, stream_);
     if (ret != ACL_SUCCESS)
@@ -365,6 +371,7 @@ Status AscendNetNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_blobs,
     ret = aclrtSynchronizeStream(stream_);
     if (ret != ACL_SUCCESS)
         return MakeAclStatus(COSMO_NN_ERR_ASCEND_SYNC, "aclrtSynchronizeStream", "", ret);
+    const auto d2h_start = clock::now();
 
     for (size_t i = 0; i < output_sizes_.size(); ++i) {
         auto& top_blob = top_blobs[i];
@@ -396,7 +403,15 @@ Status AscendNetNode::Forward(std::vector<std::shared_ptr<Blob>>& bottom_blobs,
         }
     }
 
+    const auto done = clock::now();
+    const auto us   = [](clock::time_point begin, clock::time_point end) {
+        return std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count();
+    };
     timer.Stop();
+    LOG_INFO(
+        "ascend acl forward model={} input_h2d={}us execute+sync={}us output_d2h+convert={}us total={}us",
+        GetModelPath(), us(h2d_start, execute_start), us(execute_start, d2h_start), us(d2h_start, done),
+        us(h2d_start, done));
     return COSMO_NN_OK;
 }
 

@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include "nn/device/ascend/ascend_image_to_tensor_node.h"
 #include "nn/device/ascend/ascend_net_node.h"
 
 namespace cosmo::nn {
@@ -14,6 +15,8 @@ std::unique_ptr<Node> AscendNodeCreator::CreateNode(NodeType type) {
     switch (type) {
         case NODE_NET:
             return std::make_unique<AscendNetNode>();
+        case NODE_IMAGE_TO_TENSOR:
+            return std::make_unique<AscendImageToTensorNode>();
         default:
             return nullptr;
     }
