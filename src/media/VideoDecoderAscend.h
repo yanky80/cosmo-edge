@@ -41,6 +41,9 @@ public:
     bool Close() override;
     bool IsOpened() override;
     bool Flush() override;
+    bool ReuseAcrossStreamChange() const override {
+        return true;
+    }
     bool SendPacket(const uint8_t* pkt, size_t len, int64_t frame_idx) override;
     VideoFramePtr GetFrame() override;
 

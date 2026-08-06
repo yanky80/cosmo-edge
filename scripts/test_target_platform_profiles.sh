@@ -237,7 +237,8 @@ touch \
     "$bad_arch_sdk/include/acl/acl.h" \
     "$bad_arch_sdk/include/acl/dvpp/hi_dvpp.h" \
     "$bad_arch_sdk/lib64/libascendcl.so" \
-    "$bad_arch_sdk/lib64/libacl_dvpp.so"
+    "$bad_arch_sdk/lib64/libacl_dvpp.so" \
+    "$bad_arch_sdk/lib64/libacl_dvpp_mpi.so"
 run_configure_fail ascend-bad-arch \
     -DCOSMO_TARGET_PLATFORM=ascend310p3 \
     -DCOSMO_ASCEND_SDK_ROOT="$bad_arch_sdk" \

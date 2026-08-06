@@ -468,6 +468,12 @@ if(BUILD_TESTS)
             "${COSMO_RK3588_RGA_LIB}"
             "${COSMO_RK3588_DRM_LIB}")
     endif()
+    if(COSMO_NN_USE_ASCEND_BACKEND)
+        # Ascend tests (e.g. test_ascend_image_to_tensor.cc) include the CANN
+        # headers directly; the AscendCL/DVPP libraries propagate through
+        # cosmo_nn and COMMON_LIBS.
+        target_include_directories(cosmo-tests PRIVATE "${COSMO_ASCEND_SDK_ROOT}/include")
+    endif()
     target_link_libraries(cosmo-tests PRIVATE ${COMMON_LIBS})
     if(COSMO_ENABLE_COVERAGE)
         # gcov runtime is only needed when the test binary was instrumented.

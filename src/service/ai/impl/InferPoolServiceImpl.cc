@@ -37,6 +37,11 @@ cosmo::DetectorPoolPtr InferPoolServiceImpl::GetDetectPool(const std::string& al
         // instance owns one rknn context; no duplicated contexts or a global
         // core allocator are used.
         pool = std::make_shared<cosmo::DetectorPool>(alg_code, 1, 3);
+#elif defined(COSMO_NN_USE_ASCEND_BACKEND)
+        // Ascend 310P3 (Gate 0 device): one AscendCL model instance per task,
+        // at most three instances. Each instance owns its own ACL context,
+        // stream, model and buffers; no second worker pool is added.
+        pool = std::make_shared<cosmo::DetectorPool>(alg_code, 1, 3);
 #else
         pool = std::make_shared<cosmo::DetectorPool>(alg_code);
 #endif

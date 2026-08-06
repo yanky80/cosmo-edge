@@ -146,20 +146,29 @@ void AlgChannelDecode::PrepareDecoder(VideoPacketPtr& video_frame) {
         auto* media_handle = service::ServiceRegistry::Instance().Get<mem::IDeviceContext>().GetMediaHandle();
         decoder_           = media::VideoDecoder::Create(static_cast<size_t>(device_id_), media_handle);
     }
-    // Rebuild decoder on stream restart or exception.
-    if ((stream_index_ != video_frame->stream_idx) || (codec_reset_sign_)) {
+    // Rebuild decoder on stream restart or exception. Backends that reuse one
+    // hardware channel across stream changes (Ascend DVPP VDEC) skip the
+    // Close/Open: reopening the VDEC channel while the DVPP VPC channel is
+    // alive wedges the next decode session on the 310P3.
+    const bool stream_changed = (stream_index_ != video_frame->stream_idx);
+    if ((stream_changed && !decoder_->ReuseAcrossStreamChange()) || codec_reset_sign_) {
         if (decoder_->IsOpened()) {
             decoder_->Close();
             LOG_INFO("{} Decoder Reset Last stream:{} New Stream:{} SuccessCount:{} codecResetSign:{} ",
                      name_, stream_index_, video_frame->stream_idx, decode_count_, codec_reset_sign_);
         }
     }
-    if (!decoder_->IsOpened()) {
+    // Per-stream bookkeeping resets on every stream change even when the
+    // hardware channel is reused, so timestamp/sequence tracking does not
+    // carry old-stream state into the new stream.
+    if (stream_changed) {
         frame_info_.clear();
-        stream_index_     = video_frame->stream_idx;
+        stream_index_ = video_frame->stream_idx;
+        decode_count_ = 0;
+        frame_index_  = -1;
+    }
+    if (!decoder_->IsOpened()) {
         codec_reset_sign_ = false;
-        decode_count_     = 0;
-        frame_index_      = -1;
         LOG_INFO("{} streamIndex:{} videoType:{} Changed, dumux video width:{}, height:{}", name_,
                  stream_index_, video_frame->codec_type, video_frame->width, video_frame->height);
 

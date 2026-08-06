@@ -157,6 +157,27 @@ namespace media {
         auto* dst_data = dst->GetData();
         if (src_data && dst_data) {
             std::memcpy(dst_data, src_data, frame->GetSize());
+        } else if (dst_data) {
+            // Multi-plane host surface (Ascend VDEC NV12: separate Y/UV host
+            // buffers) has no contiguous base pointer; row-copy each plane
+            // into the tight pool layout, honoring per-plane line pitch.
+            auto surface = frame->GetSurface();
+            if (surface && surface->memory_type == FrameSurfaceMemoryType::Host) {
+                const size_t w       = frame->GetWidth();
+                const size_t h       = frame->GetHeight();
+                const size_t rows[2] = {h, h / 2};
+                size_t dst_offset    = 0;
+                for (size_t i = 0; i < std::min<size_t>(2, surface->planes.size()); ++i) {
+                    const auto& p    = surface->planes[i];
+                    const size_t row = std::min(p.pitch, w);
+                    auto* src        = p.virt_addr + p.offset;
+                    auto* out        = dst_data + dst_offset;
+                    for (size_t r = 0; r < rows[i]; ++r) {
+                        std::memcpy(out + r * row, src + r * p.pitch, row);
+                    }
+                    dst_offset += rows[i] * row;
+                }
+            }
         }
         return dst;
     }
@@ -166,7 +187,14 @@ namespace media {
         if (!frame || !frame->Active()) {
             return false;
         }
-        return frame->GetData() != nullptr;
+        if (frame->GetData()) {
+            return true;
+        }
+        // Multi-plane host surfaces (Ascend VDEC NV12) have no contiguous base
+        // pointer; their planes are host memory that consumers can read.
+        auto surface = frame->GetSurface();
+        return surface != nullptr && surface->memory_type == FrameSurfaceMemoryType::Host &&
+               surface->IsValid();
     }
 
     int VideoFrameProcCpu::MapToAVPixelFormat(PixelFormat pf) {
@@ -273,7 +301,17 @@ namespace media {
             }
         };
 
-        setup_planes(src_data, src_fmt, src_planes, src_strides);
+        // Multi-plane host surfaces (Ascend VDEC NV12) have no contiguous base
+        // pointer; feed sws from per-plane pointers and line pitch instead.
+        auto src_surface = frame->GetSurface();
+        if (!src_data && src_surface && src_surface->memory_type == FrameSurfaceMemoryType::Host) {
+            for (size_t i = 0; i < src_surface->planes.size() && i < 4; ++i) {
+                src_planes[i]  = src_surface->GetPlaneData(i);
+                src_strides[i] = static_cast<int>(src_surface->planes[i].pitch);
+            }
+        } else {
+            setup_planes(src_data, src_fmt, src_planes, src_strides);
+        }
         setup_planes(dst_data, dst_fmt, dst_planes, dst_strides);
 
         sws_scale(sws_ctx, src_planes, src_strides, 0, h, dst_planes, dst_strides);
