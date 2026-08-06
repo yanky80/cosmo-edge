@@ -34,7 +34,7 @@ namespace media {
         /// channel is alive wedges the next decode session on the 310P3, so
         /// AlgChannelDecode keeps the channel open on stream change instead
         /// of Close/Open (see docs/development/ascend310p3-adaptation-plan.md).
-        virtual bool ReuseAcrossStreamChange() const {
+        virtual bool ShouldReuseAcrossStreamChange() const {
             return false;
         }
 

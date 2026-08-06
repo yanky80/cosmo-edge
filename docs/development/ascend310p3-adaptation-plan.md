@@ -566,9 +566,13 @@ NPU 和内存峰值。首期输出性能报告，但不设置 FPS 阻塞门槛�
    （`send err -541478725`），任务中途**绝不 flush**。
 
 产品修复（`src/flow/channel/AlgChannelDecode.cc` + `src/media/VideoDecoder.h` /
-`VideoDecoderAscend.h`）：`VideoDecoder` 新增 `ReuseAcrossStreamChange()`，
+`VideoDecoderAscend.h`）：`VideoDecoder` 新增 `ShouldReuseAcrossStreamChange()`，
 Ascend 后端返回 true——流切换时只重置逐流簿记（`frame_info_`、`stream_index_`、
-`decode_count_`、`frame_index_`），不再 Close/Open VDEC 通道；其他后端行为不变。
+`decode_count_`、`frame_index_`），不再 Close/Open VDEC 通道；异常路径
+（`codec_reset_sign_`）同样不再 Close/Open（避免触发楔死），只重置簿记并清除
+复位标记；`decoder_->Open()` 失败会置 `DecoderFrameFailed` 任务状态（无软件
+推理兜底）。其他后端行为不变。持久通道固定首个流的 codec/分辨率，中途换码流
+需重启任务（Close/Open 在 VPC 存活时会楔死 310P3），换码流会以解码失败上抛。
 
 预览 host-copy 修复（`src/media/VideoFrameProcCpu.cc`）：Ascend VDEC 的 NV12
 `FrameSurface` 是 Y/UV 两块独立 host plane（`GetContiguousData()` 为空），
@@ -627,7 +631,7 @@ preview-check                   : preview sws NV12ToI420: ok；
 在 `Graph::Init` 抛错，均无软件推理兜底；`CheckErrorPaths` 打印
 `error paths passed: bad OM rejected / unsupported codec rejected with no fallback`。
 
-RK3588 板回归：未执行。本 issue 的 `ReuseAcrossStreamChange()` 改动位于公共
+RK3588 板回归：未执行。本 issue 的 `ShouldReuseAcrossStreamChange()` 改动位于公共
 `AlgChannelDecode` 路径，默认返回 false 保持原有 Close/Open 行为；本地
 `scripts/test_target_platform_profiles.sh` 全绿覆盖其余后端编译。
 

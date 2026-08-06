@@ -123,6 +123,8 @@ namespace {
 
 bool require_detections_ = false;
 
+constexpr int kDefaultRtspPort = 8554;
+
 void Require(bool condition, const std::string& message) {
     if (!condition)
         throw std::runtime_error(message);
@@ -153,9 +155,14 @@ std::string ReadFile(const std::string& path) {
 // ── Demux (file or RTSP), mirroring the engine demux lifecycle ──────────
 class Demux {
 public:
+    Demux() = default;
+
     ~Demux() {
         Close();
     }
+
+    Demux(const Demux&)            = delete;
+    Demux& operator=(const Demux&) = delete;
 
     bool Open(const std::string& url) {
         Close();
@@ -591,11 +598,12 @@ void CheckErrorPaths(const std::string& om_path) {
     {
         std::ofstream out(bad_om, std::ios::binary | std::ios::trunc);
         Require(bool(out), "cannot create bad OM file");
-        out.write("not an om artifact", 18);
+        out << "not an om artifact";
     }
     OmContract dummy;
-    dummy.input_dims  = {1, 3, 960, 960};
-    dummy.input_bytes = 960 * 960 * 3 * 2;
+    constexpr size_t kOmInputBytes = 960 * 960 * 3 * 2;
+    dummy.input_dims               = {1, 3, 960, 960};
+    dummy.input_bytes              = kOmInputBytes;
     SmokeProfiler profiler;
     try {
         BuildGraph(dummy, bad_om, 300, 0.25F, profiler);
@@ -617,6 +625,9 @@ public:
     ~RtspPublisher() {
         Stop();
     }
+
+    RtspPublisher(const RtspPublisher&)            = delete;
+    RtspPublisher& operator=(const RtspPublisher&) = delete;
 
     void Start() {
         if (pid_ > 0)
@@ -648,7 +659,7 @@ public:
 private:
     std::string python_;
     std::string source_;
-    int port_  = 8554;
+    int port_  = kDefaultRtspPort;
     pid_t pid_ = -1;
 };
 
@@ -889,7 +900,7 @@ int main(int argc, char** argv) {
     bool rtsp_reconnect  = false;
     std::string rtsp_source;
     std::string rtsp_python;
-    int rtsp_port = 8554;
+    int rtsp_port = kDefaultRtspPort;
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
