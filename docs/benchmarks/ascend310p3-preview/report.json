@@ -1,0 +1,105 @@
+{
+  "schema": "cosmo-edge.ascend310p3-preview/v1",
+  "date": "2026-08-06",
+  "host": {
+    "name": "tjx-Default-string",
+    "kernel": "Linux 5.15.0-25-generic x86_64",
+    "os": "Ubuntu 22.04 LTS"
+  },
+  "npu": {
+    "name": "Ascend 310P3",
+    "device": 0,
+    "health": "OK",
+    "npu_smi": "24.1.1.1",
+    "driver": "24.1.1.1",
+    "firmware": "7.5.0.5.220",
+    "memory_total_mb": 21527
+  },
+  "model": {
+    "om": "/opt/convert/bjsubway-yolo26/model.om",
+    "om_sha256": "e8a14da469c6fc4804be86f2687fc395d9d8fe44ff1aed0b57dc2bc6676d76f8",
+    "onnx_fp32": "/opt/convert/bjsubway-yolo26/best.onnx",
+    "onnx_fp32_sha256": "e5406bd45d70140a1d2931cee593db78949d3ee49c1369bf5e7b0f261148863a"
+  },
+  "video": {
+    "path": "/tmp/subway_test_h264_x2.mp4",
+    "codec": "h264",
+    "width": 1280,
+    "height": 720,
+    "fps": 25,
+    "frames": 150,
+    "note": "fixed 75-frame subway clip concatenated twice for the first 100 valid frames"
+  },
+  "conf_threshold": 0.25,
+  "fps_gate": null,
+  "validation": {
+    "tool": "test/ascend310p3/onnx_fp32_compare.py",
+    "valid_frames_compared": 100,
+    "frames_passed": 100,
+    "matched_pairs": 100,
+    "worst_iou": 0.9939,
+    "max_conf_abs_err": 0.0033,
+    "classes_match": true,
+    "result": "pass"
+  },
+  "benchmarks": [
+    {
+      "detector_instances": 1,
+      "decoded_frames": 300,
+      "decoder": "h264_ascend",
+      "e2e_graph_ms_mean": 35.1,
+      "image_to_tensor_ms_mean": 16.1,
+      "acl_ms_mean": 19.0,
+      "postprocess_ms_mean": 0.0,
+      "e2e_fps_incl_decode": 20.4,
+      "cpu_percent": 21,
+      "peak_rss_kib": 593860,
+      "device_memory_mb": 2066,
+      "npu_aicore_percent": "23-42",
+      "result": "pass"
+    },
+    {
+      "detector_instances": 3,
+      "decoded_frames": 300,
+      "decoder": "h264_ascend",
+      "e2e_graph_ms_mean_per_instance": 35.5,
+      "e2e_ms_wall_per_frame_across_instances": 105.1,
+      "image_to_tensor_ms_mean": 16.4,
+      "acl_ms_mean": 19.1,
+      "postprocess_ms_mean": 0.0,
+      "e2e_fps_incl_decode": 8.4,
+      "cpu_percent": 32,
+      "peak_rss_kib": 613288,
+      "device_memory_peak_mb": 2292,
+      "device_memory_idle_mb": 1839,
+      "npu_aicore_percent": "26-42",
+      "result": "pass"
+    }
+  ],
+  "soak": [
+    {
+      "detector_instances": 1,
+      "frames": 84000,
+      "rounds": 84,
+      "elapsed_seconds": 4366,
+      "peak_rss_kib": 594088,
+      "cpu_percent": 31,
+      "device_memory_during_mb": 2066,
+      "device_memory_after_mb": 1840,
+      "detected_frames": 84000,
+      "result": "pass"
+    },
+    {
+      "detector_instances": 3,
+      "frames": 15400,
+      "rounds": 44,
+      "elapsed_seconds": 1882,
+      "peak_rss_kib": 613612,
+      "cpu_percent": 39,
+      "device_memory_during_mb": 2292,
+      "device_memory_after_mb": 1839,
+      "detected_frames": 15400,
+      "result": "pass"
+    }
+  ]
+}
