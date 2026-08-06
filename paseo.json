@@ -1,0 +1,5 @@
+{
+  "worktree": {
+    "setup": "code-review-graph build --repo \"$PASEO_WORKTREE_PATH\""
+  }
+}

@@ -1,0 +1,5 @@
+# Vendored third-party source; keep project code focused in the graph.
+3rd/**
+
+# Prebuilt/generated third-party assets.
+prebuild/**
