@@ -743,3 +743,32 @@ RK3588 板回归：未执行。本 issue 的 `ShouldReuseAcrossStreamChange()` �
 - W8A8、ModelSlim、NPU NMS 或自定义算子。
 - Docker 发布和多 CANN/FFmpeg 版本兼容层。
 - 为一个测试环境设计运行时插件或通用厂商抽象。
+
+#### Issue #34：原生打包、验收验证与基准发布（2026-08-06，已执行）
+
+安装包、构建/安装/环境初始化/设备检查/模型转换导入/启停/故障诊断的运维记录见
+`docs/development/ascend310p3-native-package.md`；100 帧 ONNX FP32 对比、1/3 实例
+30 分钟长稳与分阶段基准报告见 `docs/benchmarks/ascend310p3-preview/`。命令与结果在
+PR 中记录（全部硬件命令在共享 `flock` 锁下串行执行）。
+
+**100 帧对比**：固定视频为 75 帧的 `subway_test_h264.mp4` 拼接两次（150 帧），
+前 100 个有效帧（基线在 conf≥0.25 下至少一个检测）逐帧与 ONNX FP32 基线对比：
+类别全部一致，最差匹配框 IoU `0.9939`（≥0.98），最大置信绝对误差 `0.0033`（≤0.01），
+100/100 帧通过。对比工具：`ascend_task_smoke --dump-detections`（新增，JSONL 落盘）
++ `test/ascend310p3/onnx_fp32_compare.py`（baseline/compare 两个子命令；检测坐标在
+960×960 letterbox 空间，IoU 在该空间的平移+等比缩放下不变）。
+
+**基准（无 FPS 门槛）**：1 实例 e2e 35.1ms/帧（image_to_tensor≈16.1ms、
+acl≈19.0ms、postprocess≈0ms），含解码 20.4fps，CPU 21%，峰值 RSS ≈580MB，
+设备内存 2066MB；3 实例 e2e 105.1ms/帧跨 3 实例（单实例图 35.5ms），含解码
+8.4fps，CPU 32%，峰值 RSS ≈599MB，设备内存峰值 2292MB，AICore 26–42%。
+详细分阶段表见 benchmark 报告。
+
+**30 分钟长稳**：1 实例 `--frames 1000 --rounds 84`（72 分 46 秒，84000/84000
+帧检出）、3 实例 `--frames 350 --rounds 44`（31 分 22 秒，15400/15400 帧检出；
+任务 smoke 的 round 即产品任务启停生命周期，单进程持久解码器），均无崩溃；
+RSS 与设备内存采样无持续增长（1 实例稳定 2066MB、3 实例稳定 2292MB）；进程退出
+后 `npu-smi` 设备内存回到空闲基线（1839–1840MB），无未释放设备内存。
+
+**冒烟工具修复**：`RunTaskRound` 每会话按剩余帧数封顶，`--frames` 语义精确
+（原来最多过冲一个完整流会话，会破坏 3 实例长稳的 60 秒/轮时限）。

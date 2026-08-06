@@ -60,6 +60,7 @@
 //   ascend_task_smoke --om <model.om> --video <h264|h265 file|rtsp://...>
 //                     [--frames N] [--conf 0.25] [--topk 300]
 //                     [--instances 1|3] [--rounds R] [--expect-detections]
+//                     [--dump-detections <detections.jsonl>]
 //                     [--preview-check]
 //                     [--rtsp-reconnect --rtsp-source <annexb file>
 //                      --rtsp-python <rtsp_test_source.py> --rtsp-port <port>]
@@ -124,6 +125,7 @@ extern "C" {
 namespace {
 
 bool require_detections_ = false;
+std::unique_ptr<std::ofstream> g_det_dump;  // per-frame detection JSONL (issue #34)
 
 constexpr int kDefaultRtspPort = 8554;
 
@@ -442,6 +444,34 @@ int CountDetections(const std::shared_ptr<cosmo::nn::Blob>& blob, float conf_thr
             ++valid;
     }
     return valid;
+}
+
+// Append one JSON line per decoded frame (0-based global frame index):
+// {"frame":N,"dets":[{"class":..,"score":..,"cx":..,"cy":..,"w":..,"h":..}, ...]}
+// coordinates are cxcywh in original-frame pixels, same schema as the ONNX
+// FP32 baseline dump (test/ascend310p3/onnx_fp32_baseline.py).
+void DumpFrameDetections(const std::shared_ptr<cosmo::nn::Blob>& blob, float conf_threshold,
+                         size_t global_frame) {
+    if (!g_det_dump)
+        return;
+    const auto dims = blob->GetBlobDesc().dims;
+    const float* data = static_cast<const float*>(blob->GetHandle().base);
+    std::string line = fmt::format("{{\"frame\":{},\"dets\":[", global_frame);
+    bool first       = true;
+    for (int i = 0; i < dims[0] * dims[1]; ++i) {
+        if (data[i * 6 + 4] < conf_threshold)
+            continue;
+        if (!first)
+            line += ",";
+        first = false;
+        line += fmt::format(
+            "{{\"class\":{:.0f},\"score\":{:.6f},\"cx\":{:.3f},\"cy\":{:.3f},\"w\":{:.3f},\"h\":{:.3f}}}",
+            data[i * 6 + 5], data[i * 6 + 4], data[i * 6 + 0], data[i * 6 + 1], data[i * 6 + 2],
+            data[i * 6 + 3]);
+    }
+    line += "]}\n";
+    *g_det_dump << line;
+    g_det_dump->flush();
 }
 
 // ── DetectorPool (1,3) policy check ─────────────────────────────────────
@@ -799,6 +829,8 @@ size_t RunSourceOnce(const std::vector<std::unique_ptr<cosmo::nn::Graph>>& graph
             const int detections = CountDetections(outputs[0], conf_threshold);
             if (detections > 0)
                 any_detection = true;
+            if (i == 0)
+                DumpFrameDetections(outputs[0], conf_threshold, stats.decoded_frames + decoded_count - 1);
             if (i == 0 && decoded_count % 25 == 1) {
                 std::printf(
                     "frame=%zu e2e_graph=%.2fms image_to_tensor=%.2fms acl=%.2fms "
@@ -906,8 +938,12 @@ cosmo::media::VideoFramePtr RunTaskRound(const std::vector<std::unique_ptr<cosmo
     bool interrupt_fired         = false;
     const size_t interrupt_after = static_cast<size_t>(frames_needed) / 2;
     while (stats.decoded_frames - round_base < static_cast<size_t>(frames_needed)) {
-        RunSourceOnce(graphs, profilers, decoder, video_path, frames_needed, conf_threshold, first_frame,
-                      stats, mid_run_interrupt, interrupt_after, &interrupt_fired);
+        // Cap each session to the remaining round budget so --frames is exact
+        // (a file/RTSP session would otherwise overshoot by up to one whole
+        // stream, which also breaks the 60 s round deadline during soaks).
+        const size_t remaining = static_cast<size_t>(frames_needed) - (stats.decoded_frames - round_base);
+        RunSourceOnce(graphs, profilers, decoder, video_path, static_cast<int>(remaining), conf_threshold,
+                      first_frame, stats, mid_run_interrupt, interrupt_after, &interrupt_fired);
         if (stats.decoded_frames - round_base >= static_cast<size_t>(frames_needed))
             break;
         Require(std::chrono::steady_clock::now() < deadline,
@@ -936,6 +972,7 @@ int main(int argc, char** argv) {
     bool rtsp_reconnect  = false;
     std::string rtsp_source;
     std::string rtsp_python;
+    std::string det_dump_path;
     int rtsp_port = kDefaultRtspPort;
 
     for (int i = 1; i < argc; ++i) {
@@ -970,6 +1007,8 @@ int main(int argc, char** argv) {
             rtsp_port = std::stoi(value("--rtsp-port"));
         else if (arg == "--expect-detections")
             require_detections_ = true;
+        else if (arg == "--dump-detections")
+            det_dump_path = value("--dump-detections");
         else
             throw std::runtime_error("unknown argument: " + arg);
     }
@@ -979,6 +1018,10 @@ int main(int argc, char** argv) {
     Require(top_k >= 1, "--topk must be >= 1");
     Require(instances == 1 || instances == 3, "--instances must be 1 or 3");
     Require(rounds >= 1, "--rounds must be >= 1");
+    if (!det_dump_path.empty()) {
+        g_det_dump = std::make_unique<std::ofstream>(det_dump_path, std::ios::trunc);
+        Require(g_det_dump->is_open(), "cannot open --dump-detections file: " + det_dump_path);
+    }
     Require(!rtsp_reconnect || video_path.rfind("rtsp://", 0) == 0,
             "--rtsp-reconnect requires an rtsp:// --video");
     Require(!rtsp_reconnect || !rtsp_source.empty(), "--rtsp-reconnect requires --rtsp-source <annexb file>");
