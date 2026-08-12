@@ -788,8 +788,9 @@ Status Graph::LoadWeight(const std::string& model_path) {
     }
 
     return COSMO_NN_OK;
-#elif defined(COSMO_NN_USE_RKNN_BACKEND)
-    // RKNN: the graph holds one raw .rknn model file (no .nn container header).
+#elif defined(COSMO_NN_USE_RKNN_BACKEND) || defined(COSMO_NN_USE_ASCEND_BACKEND)
+    // RKNN / Ascend: the graph holds one raw model file (.rknn / .om, no .nn
+    // container header). The backend node loads the bytes in LoadWeight.
     stream.close();
 
     std::ifstream model_stream(model_path, std::ios::in | std::ios::binary);

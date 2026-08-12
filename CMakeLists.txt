@@ -77,6 +77,8 @@ if(COSMO_TARGET_PLATFORM STREQUAL "x86")
     add_compile_definitions(COSMO_TARGET_PLATFORM_X86)
 elseif(COSMO_TARGET_PLATFORM STREQUAL "sophon")
     add_compile_definitions(COSMO_TARGET_PLATFORM_SOPHON)
+elseif(COSMO_TARGET_PLATFORM STREQUAL "ascend310p3")
+    add_compile_definitions(COSMO_TARGET_PLATFORM_ASCEND310P3)
 else()
     add_compile_definitions(COSMO_TARGET_PLATFORM_RK3588)
 endif()
@@ -86,26 +88,28 @@ set(_cosmo_nn_backend_count 0)
 foreach(_nn_backend_option
         COSMO_NN_USE_SOPHON_BACKEND
         COSMO_NN_USE_CPU_BACKEND
-        COSMO_NN_USE_RKNN_BACKEND)
+        COSMO_NN_USE_RKNN_BACKEND
+        COSMO_NN_USE_ASCEND_BACKEND)
     if(${_nn_backend_option})
         math(EXPR _cosmo_nn_backend_count "${_cosmo_nn_backend_count} + 1")
     endif()
 endforeach()
 if(NOT _cosmo_nn_backend_count EQUAL 1)
-    message(FATAL_ERROR "Exactly one NN backend must be enabled: Sophon, CPU, or RKNN")
+    message(FATAL_ERROR "Exactly one NN backend must be enabled: Sophon, CPU, RKNN, or Ascend")
 endif()
 
 set(_cosmo_media_backend_count 0)
 foreach(_media_backend_option
         COSMO_MEDIA_USE_SOPHON_BACKEND
         COSMO_MEDIA_USE_CPU_BACKEND
-        COSMO_MEDIA_USE_RK3588_BACKEND)
+        COSMO_MEDIA_USE_RK3588_BACKEND
+        COSMO_MEDIA_USE_ASCEND_BACKEND)
     if(${_media_backend_option})
         math(EXPR _cosmo_media_backend_count "${_cosmo_media_backend_count} + 1")
     endif()
 endforeach()
 if(NOT _cosmo_media_backend_count EQUAL 1)
-    message(FATAL_ERROR "Exactly one media backend must be enabled: Sophon, CPU, or RK3588")
+    message(FATAL_ERROR "Exactly one media backend must be enabled: Sophon, CPU, RK3588, or Ascend")
 endif()
 if(COSMO_MEDIA_USE_SOPHON_BACKEND AND NOT COSMO_NN_USE_SOPHON_BACKEND)
     message(FATAL_ERROR "Sophon media requires the Sophon device runtime")
@@ -113,11 +117,16 @@ endif()
 if(COSMO_MEDIA_USE_RK3588_BACKEND AND NOT COSMO_NN_USE_RKNN_BACKEND)
     message(FATAL_ERROR "RK3588 media requires the RKNN device runtime")
 endif()
+if(COSMO_MEDIA_USE_ASCEND_BACKEND AND NOT COSMO_NN_USE_ASCEND_BACKEND)
+    message(FATAL_ERROR "Ascend media requires the Ascend device runtime")
+endif()
 
 if(COSMO_MEDIA_USE_SOPHON_BACKEND)
     add_compile_definitions(COSMO_MEDIA_USE_SOPHON_BACKEND)
 elseif(COSMO_MEDIA_USE_RK3588_BACKEND)
     add_compile_definitions(COSMO_MEDIA_USE_RK3588_BACKEND)
+elseif(COSMO_MEDIA_USE_ASCEND_BACKEND)
+    add_compile_definitions(COSMO_MEDIA_USE_ASCEND_BACKEND)
 else()
     add_compile_definitions(COSMO_MEDIA_USE_CPU_BACKEND)
 endif()
@@ -140,6 +149,8 @@ if(COSMO_NN_USE_RKNN_BACKEND)
     add_compile_definitions(COSMO_NN_USE_RKNN_BACKEND)
 elseif(COSMO_NN_USE_SOPHON_BACKEND)
     add_compile_definitions(COSMO_NN_USE_SOPHON_BACKEND)
+elseif(COSMO_NN_USE_ASCEND_BACKEND)
+    add_compile_definitions(COSMO_NN_USE_ASCEND_BACKEND)
 else()
     add_compile_definitions(COSMO_NN_USE_CPU_BACKEND)
 endif()
@@ -167,6 +178,7 @@ message(STATUS "\tPlatform:  ${COSMO_TARGET_PLATFORM}")
 message(STATUS "\tTarget:    ${COSMO_TARGET_ARCH}")
 message(STATUS "\tResource:  ${RESOURCE_DIR}")
 message(STATUS "\tModel ext: ${COSMO_MODEL_FILE_EXTENSIONS}")
+message(STATUS "\tEngine:    ${COSMO_ENGINE_TYPE}")
 
 if(COSMO_TARGET_ARCH STREQUAL "aarch64")
     set(COSMO_EXTERNAL_PROJECT_TOOLCHAIN_FILE "${CMAKE_SOURCE_DIR}/toolchains/aarch64-linux.toolchain.cmake")
@@ -239,6 +251,9 @@ include(cmake/mqtt.cmake)
 include(cmake/event.cmake)
 if(COSMO_TARGET_PLATFORM STREQUAL "rk3588")
     include(cmake/rk3588_sdk.cmake)
+endif()
+if(COSMO_TARGET_PLATFORM STREQUAL "ascend310p3")
+    include(cmake/ascend_sdk.cmake)
 endif()
 include(cmake/ffmpeg.cmake)
 include(cmake/cryptopp.cmake)
@@ -368,6 +383,12 @@ if(COSMO_NN_USE_RKNN_BACKEND)
         "${COSMO_RK3588_RGA_LIB}"
         "${COSMO_RK3588_DRM_LIB}")
 endif()
+if(COSMO_NN_USE_ASCEND_BACKEND)
+    list(APPEND COMMON_LIBS
+        "${COSMO_ASCENDCL_LIB}"
+        "${COSMO_ASCEND_DVPP_LIB}"
+        "${COSMO_ASCEND_DVPP_MPI_LIB}")
+endif()
 
 ##########################################################
 #Main Executable
@@ -446,6 +467,12 @@ if(BUILD_TESTS)
             "${COSMO_RK3588_RKNNRT_LIB}"
             "${COSMO_RK3588_RGA_LIB}"
             "${COSMO_RK3588_DRM_LIB}")
+    endif()
+    if(COSMO_NN_USE_ASCEND_BACKEND)
+        # Ascend tests (e.g. test_ascend_image_to_tensor.cc) include the CANN
+        # headers directly; the AscendCL/DVPP libraries propagate through
+        # cosmo_nn and COMMON_LIBS.
+        target_include_directories(cosmo-tests PRIVATE "${COSMO_ASCEND_SDK_ROOT}/include")
     endif()
     target_link_libraries(cosmo-tests PRIVATE ${COMMON_LIBS})
     if(COSMO_ENABLE_COVERAGE)

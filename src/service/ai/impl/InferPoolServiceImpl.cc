@@ -32,10 +32,10 @@ cosmo::DetectorPoolPtr InferPoolServiceImpl::GetDetectPool(const std::string& al
     std::lock_guard<std::mutex> lock(detect_mtx_);
     auto& pool = detect_pools_[alg_code];
     if (!pool) {
-#ifdef COSMO_NN_USE_RKNN_BACKEND
-        // RK3588: one RKNN instance per task, at most three instances. Each
-        // instance owns one rknn context; no duplicated contexts or a global
-        // core allocator are used.
+#if defined(COSMO_NN_USE_RKNN_BACKEND) || defined(COSMO_NN_USE_ASCEND_BACKEND)
+        // RK3588 and Ascend 310P3: one accelerator instance per task, at most
+        // three. Each instance owns its own RKNN/ACL context, stream and
+        // buffers; no second worker pool is added.
         pool = std::make_shared<cosmo::DetectorPool>(alg_code, 1, 3);
 #else
         pool = std::make_shared<cosmo::DetectorPool>(alg_code);

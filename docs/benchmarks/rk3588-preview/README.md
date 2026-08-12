@@ -20,7 +20,7 @@ and video paths are intentionally not copied into the repository.
 ## Reproduction
 
 Build the standalone acceptance smoke on the board using the command in
-[`test/rk3588/detector_task_smoke.cc`](../../../test/rk3588/detector_task_smoke.cc),
+`test/rk3588/detector_task_smoke.cc`,
 then run the one-instance measurement:
 
 ```sh

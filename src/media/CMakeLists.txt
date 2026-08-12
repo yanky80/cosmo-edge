@@ -57,10 +57,37 @@ set(MEDIA_RK3588_SRC
     VideoFrameProcRk3588.cc      VideoFrameProcRk3588.h
 )
 
+# Ascend-specific source files (custom Ascend FFmpeg hardware decoding).
+# VideoDecoderAscendHostCopy.cc needs the CANN SDK, so it is only compiled
+# under the Ascend media backend, never in the hermetic decoder contract check.
+set(MEDIA_ASCEND_SRC
+    VideoDecoderAscend.cc         VideoDecoderAscend.h
+    VideoDecoderAscendHostCopy.cc
+    VideoDecoderCreateAscend.cc
+)
+
+# Host-side consumers (preview, capture, OSD, record, stream push) reuse the
+# generic CPU frame processing and encoder over the host NV12 surfaces the
+# Ascend hardware decoder produces. No CPU software decoder is compiled:
+# COSMO_MEDIA_USE_ASCEND_BACKEND keeps VideoDecoder::Create on the Ascend
+# factory so unsupported codecs fail instead of falling back.
+set(MEDIA_ASCEND_HOST_SRC
+    VideoEncoderCreateCpu.cc
+    VideoEncoderCpu.cc            VideoEncoderCpu.h
+    VideoFrameProcFactoryCpu.cc
+    VideoFrameProcCpu.cc          VideoFrameProcCpu.h
+)
+
 if(COSMO_MEDIA_USE_SOPHON_BACKEND)
     add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_SOPHON_SRC})
 elseif(COSMO_MEDIA_USE_RK3588_BACKEND)
     add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_RK3588_SRC})
+elseif(COSMO_MEDIA_USE_ASCEND_BACKEND)
+    # Ascend media backend: custom Ascend FFmpeg hard decoding
+    # (h264_ascend/h265_ascend) to device AV_PIX_FMT_ASCEND FrameSurfaces
+    # (host NV12 fallback for sources without device export), plus the generic
+    # host-copy path for task-side preview/OSD/record consumers.
+    add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_ASCEND_SRC} ${MEDIA_ASCEND_HOST_SRC})
 elseif(COSMO_MEDIA_USE_CPU_BACKEND)
     add_library(cosmo_media OBJECT ${MEDIA_COMMON_SRC} ${MEDIA_CPU_SRC})
 else()

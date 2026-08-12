@@ -28,8 +28,8 @@ if(DEFINED CACHE{COSMO_MEDIA_USE_CPU_BACKEND})
     set(_cosmo_legacy_media_cpu_value "$CACHE{COSMO_MEDIA_USE_CPU_BACKEND}")
 endif()
 
-set(COSMO_TARGET_PLATFORM "sophon" CACHE STRING "Target platform profile: x86, sophon, or rk3588")
-set_property(CACHE COSMO_TARGET_PLATFORM PROPERTY STRINGS x86 sophon rk3588)
+set(COSMO_TARGET_PLATFORM "sophon" CACHE STRING "Target platform profile: x86, sophon, rk3588, or ascend310p3")
+set_property(CACHE COSMO_TARGET_PLATFORM PROPERTY STRINGS x86 sophon rk3588 ascend310p3)
 
 function(_cosmo_norm_bool out value)
     string(TOUPPER "${value}" _cosmo_bool_value)
@@ -47,12 +47,25 @@ function(_cosmo_fail_legacy message_text)
     message(FATAL_ERROR "${message_text}")
 endfunction()
 
+function(_cosmo_host_arch out_var)
+    # Normalize CMAKE_HOST_SYSTEM_PROCESSOR to x86_64 / aarch64 (empty for
+    # other hosts) so host checks share one spelling.
+    if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+        set(${out_var} "x86_64" PARENT_SCOPE)
+    elseif(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        set(${out_var} "aarch64" PARENT_SCOPE)
+    else()
+        set(${out_var} "" PARENT_SCOPE)
+    endif()
+endfunction()
+
 string(TOLOWER "${COSMO_TARGET_PLATFORM}" COSMO_TARGET_PLATFORM)
 if(NOT COSMO_TARGET_PLATFORM STREQUAL "x86" AND
    NOT COSMO_TARGET_PLATFORM STREQUAL "sophon" AND
-   NOT COSMO_TARGET_PLATFORM STREQUAL "rk3588")
+   NOT COSMO_TARGET_PLATFORM STREQUAL "rk3588" AND
+   NOT COSMO_TARGET_PLATFORM STREQUAL "ascend310p3")
     message(FATAL_ERROR
-        "Unsupported COSMO_TARGET_PLATFORM=${COSMO_TARGET_PLATFORM}. Expected x86, sophon, or rk3588.")
+        "Unsupported COSMO_TARGET_PLATFORM=${COSMO_TARGET_PLATFORM}. Expected x86, sophon, rk3588, or ascend310p3.")
 endif()
 
 set(_cosmo_inferred_platform "${COSMO_TARGET_PLATFORM}")
@@ -99,7 +112,10 @@ if(_cosmo_legacy_media_sophon_explicit)
     endif()
 endif()
 
-if(_cosmo_legacy_arch_explicit)
+if(_cosmo_legacy_arch_explicit AND
+   NOT COSMO_TARGET_PLATFORM STREQUAL "ascend310p3")
+    # For ascend310p3, COSMO_TARGET_ARCH is a profile parameter (x86_64 default
+    # or aarch64 target), not a legacy platform toggle.
     if(_cosmo_legacy_arch_value STREQUAL "x86_64")
         if(_cosmo_used_legacy_inputs AND NOT _cosmo_inferred_platform STREQUAL "x86")
             _cosmo_fail_legacy("COSMO_TARGET_ARCH=x86_64 conflicts with the selected legacy backend settings.")
@@ -161,6 +177,44 @@ elseif(COSMO_TARGET_PLATFORM STREQUAL "sophon")
     set(COSMO_SUPPORTED_CHIP_TYPES "BM1688;CV186X")
     set(COSMO_FFMPEG_SOURCE "prebuilt")
     set(COSMO_TARGET_TOOLCHAIN_FILE "${CMAKE_SOURCE_DIR}/toolchains/aarch64-linux.toolchain.cmake")
+elseif(COSMO_TARGET_PLATFORM STREQUAL "ascend310p3")
+    if(NOT DEFINED CACHE{COSMO_TARGET_ARCH})
+        set(COSMO_TARGET_ARCH "x86_64" CACHE STRING
+            "Target architecture for ascend310p3 (x86_64 default or aarch64)" FORCE)
+    endif()
+    string(TOLOWER "${COSMO_TARGET_ARCH}" _cosmo_ascend_arch)
+    if(NOT _cosmo_ascend_arch STREQUAL "x86_64" AND
+       NOT _cosmo_ascend_arch STREQUAL "aarch64")
+        message(FATAL_ERROR
+            "Unsupported COSMO_TARGET_ARCH=${_cosmo_ascend_arch} for ascend310p3 "
+            "(expected x86_64 or aarch64).")
+    endif()
+    set(COSMO_TARGET_ARCH "${_cosmo_ascend_arch}" CACHE STRING
+        "Target architecture for ascend310p3 (x86_64 default or aarch64)" FORCE)
+    set(COSMO_NN_USE_SOPHON_BACKEND OFF CACHE BOOL "Derived from COSMO_TARGET_PLATFORM" FORCE)
+    set(COSMO_NN_USE_CPU_BACKEND OFF CACHE BOOL "Derived from COSMO_TARGET_PLATFORM" FORCE)
+    set(COSMO_NN_USE_RKNN_BACKEND OFF CACHE BOOL "Derived from COSMO_TARGET_PLATFORM" FORCE)
+    set(COSMO_NN_USE_ASCEND_BACKEND ON CACHE BOOL "Derived from COSMO_TARGET_PLATFORM" FORCE)
+    set(COSMO_MEDIA_USE_SOPHON_BACKEND OFF CACHE BOOL "Derived from COSMO_TARGET_PLATFORM" FORCE)
+    set(COSMO_MEDIA_USE_CPU_BACKEND OFF CACHE BOOL "Derived from COSMO_TARGET_PLATFORM" FORCE)
+    set(COSMO_MEDIA_USE_RK3588_BACKEND OFF CACHE BOOL "Derived from COSMO_TARGET_PLATFORM" FORCE)
+    set(COSMO_MEDIA_USE_ASCEND_BACKEND ON CACHE BOOL "Derived from COSMO_TARGET_PLATFORM" FORCE)
+    set(COSMO_DEFAULT_RESOURCE_DIR "${CMAKE_SOURCE_DIR}/data/resource/aiboxresource_ascend310p3")
+    set(COSMO_MODEL_FILE_EXTENSIONS ".om")
+    set(COSMO_MODEL_PRIMARY_EXTENSION ".om")
+    set(COSMO_MODEL_DIR_TOKEN "ASCEND310P3")
+    set(COSMO_ENGINE_TYPE "ASCEND310P3")
+    set(COSMO_SUPPORTED_CHIP_TYPES "ASCEND310P3")
+    set(COSMO_FFMPEG_SOURCE "system")
+    # Native aarch64 hosts build with the host toolchain; x86_64 hosts use the
+    # aarch64 cross toolchain for aarch64 targets.
+    _cosmo_host_arch(_cosmo_ascend_host_arch)
+    if(COSMO_TARGET_ARCH STREQUAL "aarch64" AND
+       NOT _cosmo_ascend_host_arch STREQUAL "aarch64")
+        set(COSMO_TARGET_TOOLCHAIN_FILE "${CMAKE_SOURCE_DIR}/toolchains/aarch64-linux.toolchain.cmake")
+    else()
+        set(COSMO_TARGET_TOOLCHAIN_FILE "")
+    endif()
 else()
     set(COSMO_TARGET_ARCH "aarch64" CACHE STRING "Derived target architecture" FORCE)
     set(COSMO_NN_USE_SOPHON_BACKEND OFF CACHE BOOL "Derived from COSMO_TARGET_PLATFORM" FORCE)
@@ -189,7 +243,11 @@ if(COSMO_TARGET_TOOLCHAIN_FILE AND
         CACHE FILEPATH "Toolchain derived from COSMO_TARGET_PLATFORM")
 endif()
 
-if(COSMO_TARGET_ARCH STREQUAL "aarch64")
+_cosmo_host_arch(_cosmo_host_arch)
+if(COSMO_TARGET_ARCH STREQUAL "aarch64" AND
+   NOT _cosmo_host_arch STREQUAL "aarch64")
+    # Cross-build aarch64 targets from a non-aarch64 host (native aarch64
+    # builds keep the host toolchain).
     if(NOT DEFINED CACHE{CMAKE_C_COMPILER} OR NOT "$CACHE{CMAKE_C_COMPILER}" MATCHES "aarch64")
         set(CMAKE_C_COMPILER "/usr/bin/aarch64-linux-gnu-gcc"
             CACHE FILEPATH "C compiler for aarch64 targets" FORCE)

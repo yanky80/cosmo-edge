@@ -25,6 +25,75 @@ if(COSMO_TARGET_PLATFORM STREQUAL "rk3588")
     set(FFMPEG_SWRESAMPLE_LIB "${COSMO_RK3588_SWRESAMPLE_LIB}")
     set(FFMPEG_SWSCALE_LIB "${COSMO_RK3588_SWSCALE_LIB}")
     message(STATUS "FFmpeg: using RK3588 sysroot libraries from ${COSMO_RK3588_SYSROOT}")
+elseif(COSMO_TARGET_PLATFORM STREQUAL "ascend310p3")
+    # Custom Ascend FFmpeg (h264_ascend/h265_ascend decoders and encoders);
+    # never copied from prebuild/. Lookup order:
+    #   1. COSMO_ASCEND_SYSROOT  (cross builds and hermetic tests)
+    #   2. COSMO_ASCEND_FFMPEG_ROOT (defaults to /opt/ffmpeg-4.4.1/ascend on
+    #      x86_64, the locked test-host baseline)
+    #   3. system FFmpeg dev packages via CMAKE_LIBRARY_ARCHITECTURE
+    set(FFMPEG_PREBUILD_DIR "")
+    set(_cosmo_system_ffmpeg_include_dirs "")
+    set(_cosmo_system_ffmpeg_lib_dirs "")
+
+    # Debian-style multiarch triplet for the target (e.g. aarch64-linux-gnu).
+    set(_cosmo_ffmpeg_lib_arch "${CMAKE_LIBRARY_ARCHITECTURE}")
+    if(NOT _cosmo_ffmpeg_lib_arch)
+        if(COSMO_TARGET_ARCH STREQUAL "aarch64")
+            set(_cosmo_ffmpeg_lib_arch "aarch64-linux-gnu")
+        else()
+            set(_cosmo_ffmpeg_lib_arch "x86_64-linux-gnu")
+        endif()
+    endif()
+
+    if(COSMO_ASCEND_SYSROOT)
+        set(_cosmo_system_ffmpeg_no_default_path NO_DEFAULT_PATH)
+        set(_cosmo_system_ffmpeg_include_dirs "${COSMO_ASCEND_SYSROOT}/usr/include")
+        set(_cosmo_system_ffmpeg_lib_dirs
+            "${COSMO_ASCEND_SYSROOT}/usr/lib/${_cosmo_ffmpeg_lib_arch}"
+            "${COSMO_ASCEND_SYSROOT}/usr/lib64"
+            "${COSMO_ASCEND_SYSROOT}/usr/lib")
+    else()
+        set(_cosmo_ascend_ffmpeg_root "${COSMO_ASCEND_FFMPEG_ROOT}")
+        if(NOT _cosmo_ascend_ffmpeg_root AND COSMO_TARGET_ARCH STREQUAL "x86_64")
+            # Locked test-host baseline (docs/development/ascend310p3-test-host-baseline.md).
+            set(_cosmo_ascend_ffmpeg_root "/opt/ffmpeg-4.4.1/ascend")
+        endif()
+        if(EXISTS "${_cosmo_ascend_ffmpeg_root}/include/libavcodec/avcodec.h")
+            set(_cosmo_system_ffmpeg_no_default_path NO_DEFAULT_PATH)
+            set(_cosmo_system_ffmpeg_include_dirs "${_cosmo_ascend_ffmpeg_root}/include")
+            set(_cosmo_system_ffmpeg_lib_dirs "${_cosmo_ascend_ffmpeg_root}/lib")
+        else()
+            # Fallback: system FFmpeg dev packages (multiarch-aware).
+            set(_cosmo_system_ffmpeg_no_default_path "")
+            set(_cosmo_system_ffmpeg_lib_dirs
+                "/usr/lib/${_cosmo_ffmpeg_lib_arch}"
+                "/lib/${_cosmo_ffmpeg_lib_arch}"
+                "/usr/lib64")
+        endif()
+    endif()
+    find_path(FFMPEG_HEADERS libavcodec/avcodec.h
+        PATHS ${_cosmo_system_ffmpeg_include_dirs}
+        ${_cosmo_system_ffmpeg_no_default_path})
+    if(NOT FFMPEG_HEADERS)
+        message(FATAL_ERROR
+            "COSMO_TARGET_PLATFORM=ascend310p3 requires system FFmpeg headers "
+            "(libavcodec/avcodec.h not found)")
+    endif()
+    foreach(_cosmo_system_ffmpeg_lib
+            avcodec avdevice avfilter avformat avutil swresample swscale)
+        string(TOUPPER "${_cosmo_system_ffmpeg_lib}" _cosmo_system_ffmpeg_lib_upper)
+        find_library(FFMPEG_${_cosmo_system_ffmpeg_lib_upper}_LIB
+            "${_cosmo_system_ffmpeg_lib}"
+            PATHS ${_cosmo_system_ffmpeg_lib_dirs}
+            ${_cosmo_system_ffmpeg_no_default_path})
+        if(NOT FFMPEG_${_cosmo_system_ffmpeg_lib_upper}_LIB)
+            message(FATAL_ERROR
+                "COSMO_TARGET_PLATFORM=ascend310p3 requires system FFmpeg library "
+                "lib${_cosmo_system_ffmpeg_lib}.so (not found)")
+        endif()
+    endforeach()
+    message(STATUS "FFmpeg: using external Ascend/system libraries (headers: ${FFMPEG_HEADERS})")
 elseif(COSMO_TARGET_ARCH STREQUAL "aarch64")
     set(FFMPEG_PREBUILD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/prebuild/ffmpeg/aarch64)
 elseif(COSMO_TARGET_ARCH STREQUAL "x86_64")
@@ -33,7 +102,7 @@ else()
     message(FATAL_ERROR "Unsupported architecture for FFmpeg prebuilt: ${COSMO_TARGET_ARCH}")
 endif()
 
-if(NOT COSMO_TARGET_PLATFORM STREQUAL "rk3588")
+if(FFMPEG_PREBUILD_DIR)
     set(FFMPEG_HEADERS         ${FFMPEG_PREBUILD_DIR}/include)
     set(FFMPEG_AVCODEC_LIB     ${FFMPEG_PREBUILD_DIR}/lib/libavcodec.so)
     set(FFMPEG_AVDEVICE_LIB    ${FFMPEG_PREBUILD_DIR}/lib/libavdevice.so)

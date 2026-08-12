@@ -22,6 +22,22 @@ namespace media {
 
         virtual bool IsOpened() = 0;
 
+        /// Drains any buffered input through the decoder (EOS). Synchronous
+        /// backends deliver every frame during the stream, so the default is a
+        /// no-op; asynchronous hardware backends must override so in-flight
+        /// frames are delivered, not dropped, before teardown or stream switch.
+        virtual bool Flush();
+
+        /// Whether one hardware channel can be reused across stream restarts
+        /// (new SPS/PPS mid-channel). The Ascend DVPP VDEC channel handles
+        /// stream changes natively; reopening the channel while the DVPP VPC
+        /// channel is alive wedges the next decode session on the 310P3, so
+        /// AlgChannelDecode keeps the channel open on stream change instead
+        /// of Close/Open (see docs/development/ascend310p3-adaptation-plan.md).
+        virtual bool ShouldReuseAcrossStreamChange() const {
+            return false;
+        }
+
         VideoFramePtr Decode(const uint8_t* pkt, size_t len, int64_t frame_idx, bool& result);
 
         virtual bool SendPacket(const uint8_t* pkt, size_t len, int64_t frame_idx) = 0;
@@ -32,9 +48,11 @@ namespace media {
 
         size_t GetHeight() const;
 
-        /// Factory — creates the correct backend decoder (Sophon or CPU).
+        /// Factory — creates the correct backend decoder (Sophon, CPU,
+        /// RK3588, or Ascend).
         /// @param name       Decoder index / channel ID
-        /// @param mediaHandle  Device handle (used by Sophon, ignored by CPU)
+        /// @param mediaHandle  Device handle (used by Sophon, ignored by
+        ///                     CPU/Ascend; Ascend pins the Gate 0 device id)
         static std::unique_ptr<VideoDecoder> Create(size_t name, void* mediaHandle);
 
     protected:

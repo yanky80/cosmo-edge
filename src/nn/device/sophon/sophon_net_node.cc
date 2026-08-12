@@ -17,6 +17,7 @@
 #include "nn/device/sophon/sophon_node.h"
 #include "nn/utils/blob_memory_size_info.h"
 #include "nn/utils/blob_memory_size_utils.h"
+#include "nn/utils/data_type_utils.h"
 #include "nn/utils/string_format.h"
 
 namespace cosmo::nn {
@@ -54,36 +55,6 @@ namespace {
 
         *byte_size = count * static_cast<size_t>(element_bytes);
         return *byte_size > 0 && *byte_size <= kMaxOutputTensorBytes;
-    }
-
-    float Float16ToFloat(uint16_t value) {
-        const uint32_t sign     = static_cast<uint32_t>(value & 0x8000U) << 16U;
-        const uint32_t exponent = (value >> 10U) & 0x1fU;
-        const uint32_t mantissa = value & 0x03ffU;
-        uint32_t bits           = 0;
-        if (exponent == 0) {
-            if (mantissa == 0) {
-                bits = sign;
-            } else {
-                uint32_t normalized_mantissa = mantissa;
-                int shift                    = 0;
-                while ((normalized_mantissa & 0x0400U) == 0U) {
-                    normalized_mantissa <<= 1U;
-                    ++shift;
-                }
-                normalized_mantissa &= 0x03ffU;
-                const uint32_t normalized_exponent = static_cast<uint32_t>(127 - 14 - shift);
-                bits = sign | (normalized_exponent << 23U) | (normalized_mantissa << 13U);
-            }
-        } else if (exponent == 0x1fU) {
-            bits = sign | 0x7f800000U | (mantissa << 13U);
-        } else {
-            bits = sign | ((exponent + (127U - 15U)) << 23U) | (mantissa << 13U);
-        }
-
-        float result = 0.0F;
-        std::memcpy(&result, &bits, sizeof(result));
-        return result;
     }
 
     float BFloat16ToFloat(uint16_t value) {
@@ -158,7 +129,7 @@ namespace {
         auto* out = static_cast<float*>(dst);
         switch (dtype) {
             case BM_FLOAT16:
-                ConvertToFloat<uint16_t>(tmp.data(), element_count, 1.0F, out, Float16ToFloat);
+                ConvertToFloat<uint16_t>(tmp.data(), element_count, 1.0F, out, Fp16ToFloat);
                 return COSMO_NN_OK;
             case BM_BFLOAT16:
                 ConvertToFloat<uint16_t>(tmp.data(), element_count, 1.0F, out, BFloat16ToFloat);
@@ -822,9 +793,8 @@ void SophonNetNode::UpdateTopBlobDesc(size_t index, BlobDesc& desc) const {
         return;
 
     desc.is_affine_quantized = true;
-    desc.affine_scale =
-        m_netinfo->output_scales != nullptr ? m_netinfo->output_scales[index] : 1.0f;
-    desc.affine_zero_point = 0;
+    desc.affine_scale        = m_netinfo->output_scales != nullptr ? m_netinfo->output_scales[index] : 1.0f;
+    desc.affine_zero_point   = 0;
 }
 
 }  // namespace cosmo::nn
