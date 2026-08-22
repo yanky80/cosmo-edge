@@ -1,4 +1,5 @@
-#if defined(COSMO_NN_USE_CPU_BACKEND) || defined(COSMO_NN_USE_RKNN_BACKEND)
+#if defined(COSMO_NN_USE_CPU_BACKEND) || defined(COSMO_NN_USE_RKNN_BACKEND) || \
+    defined(COSMO_NN_USE_ASCEND_BACKEND)
 
 #include "service/system/impl/AcceleratorMetricsProvider.h"
 
@@ -24,4 +25,4 @@ std::unique_ptr<AcceleratorMetricsProvider> CreateAcceleratorMetricsProvider() {
 
 }  // namespace cosmo::service::detail
 
-#endif  // COSMO_NN_USE_CPU_BACKEND || COSMO_NN_USE_RKNN_BACKEND
+#endif  // CPU/RKNN/Ascend backends use the host metrics fallback.

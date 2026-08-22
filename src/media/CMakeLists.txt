@@ -98,6 +98,9 @@ endif()
 target_include_directories(cosmo_media PRIVATE
     ${CMAKE_SOURCE_DIR}/src
 )
+if(COSMO_MEDIA_USE_ASCEND_BACKEND)
+    target_include_directories(cosmo_media PRIVATE "${COSMO_ASCEND_SDK_ROOT}/include")
+endif()
 
 target_link_libraries(cosmo_media PRIVATE cosmo_common
     ffmpeg_avcodec ffmpeg_avdevice ffmpeg_avformat ffmpeg_avutil ffmpeg_swscale

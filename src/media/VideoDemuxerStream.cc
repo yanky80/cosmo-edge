@@ -50,7 +50,7 @@ namespace media {
             return util::ErrorEnum::DemuxFindStreamFail;
         }
 
-        const AVCodec* codec = nullptr;
+        AVCodec* codec = nullptr;
         video_stream_idx_ = av_find_best_stream(fmt_ctx_, AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
         if (video_stream_idx_ < 0 || !codec) {
             SafeCloseContext();
