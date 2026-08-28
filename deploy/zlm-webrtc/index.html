@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>摄像头直播</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #101419; }
+    main { width: min(1100px, 94vw); }
+    h1 { font-size: 1.25rem; font-weight: 500; margin: 0 0 1rem; }
+    video { display: block; width: 100%; max-height: 78vh; background: #000; border-radius: 8px; }
+    #status { color: #9aa7b4; min-height: 1.5em; }
+    button { padding: .5rem 1rem; border: 0; border-radius: 5px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 id="title">摄像头直播</h1>
+    <video id="video" autoplay playsinline controls></video>
+    <p id="status">正在连接…</p>
+    <button id="start" hidden>开始播放</button>
+  </main>
+
+  <script src="./ZLMRTCClient.js"></script>
+  <script>
+    const params = new URL(location.href).searchParams;
+    const app = params.get('app') || 'live';
+    const stream = params.get('stream') || 'camera';
+    const video = document.getElementById('video');
+    const status = document.getElementById('status');
+    const startButton = document.getElementById('start');
+    let player;
+    let connecting = false;
+
+    // 允许浏览器自动开始渲染；用户仍可通过 video 控件打开声音。
+    video.muted = true;
+
+    document.getElementById('title').textContent = `${app}/${stream}`;
+
+    video.addEventListener('loadeddata', () => {
+      setStatus('播放中');
+    });
+
+    function setStatus(message) {
+      status.textContent = message;
+    }
+
+    function stop() {
+      connecting = false;
+      if (player) {
+        player.close();
+        player = null;
+      }
+      video.srcObject = null;
+    }
+
+    function start() {
+      if (connecting) return;
+      stop();
+      connecting = true;
+      startButton.hidden = true;
+      setStatus('正在连接…');
+      const api = new URL('/zlm/index/api/webrtc', location.origin);
+      api.search = new URLSearchParams({app, stream, type: 'play'});
+      player = new ZLMRTCClient.Endpoint({
+        element: video,
+        debug: true,
+        zlmsdpUrl: api.href,
+        recvOnly: true,
+        audioEnable: true,
+        videoEnable: true
+      });
+      player.on(ZLMRTCClient.Events.WEBRTC_ON_REMOTE_STREAMS, () => {
+        connecting = false;
+        setStatus('媒体轨道已建立，等待首帧…');
+        video.play().catch(() => {
+          startButton.hidden = false;
+          setStatus('浏览器阻止了自动播放，请点击“开始播放”');
+        });
+      });
+      player.on(ZLMRTCClient.Events.WEBRTC_ON_CONNECTION_STATE_CHANGE, state => {
+        console.debug('WebRTC connection state:', state);
+        if (state === 'failed' || state === 'disconnected') {
+          connecting = false;
+          setStatus(`连接${state === 'failed' ? '失败' : '中断'}`);
+          startButton.hidden = false;
+        }
+      });
+      player.on(ZLMRTCClient.Events.WEBRTC_ICE_CANDIDATE_ERROR, error => {
+        connecting = false;
+        console.error('WebRTC ICE error:', error);
+        setStatus('ICE 连接失败');
+        startButton.hidden = false;
+      });
+      player.on(ZLMRTCClient.Events.WEBRTC_OFFER_ANWSER_EXCHANGE_FAILED, error => {
+        connecting = false;
+        console.error(error);
+        setStatus('WebRTC 协商失败');
+        startButton.hidden = false;
+      });
+    }
+
+    startButton.addEventListener('click', start);
+    window.addEventListener('beforeunload', stop);
+    start();
+  </script>
+</body>
+</html>
